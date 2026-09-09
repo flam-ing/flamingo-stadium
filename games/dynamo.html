@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>번개 발전기 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: 파랑이면 A 연타 · 노랑이면 L 연타</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const NAMES = ['나', '핑고', '밍고', '라밍'];
+const COLS = [palette.pink, palette.rivals[0], palette.rivals[1], palette.rivals[2]];
+let color, switchT, players, bolts, flash, mashT, lastSwitch;
+function newColor() { color = color === 'blue' ? 'gold' : 'blue'; switchT = rand(0.7, 2); flash = 0.25; lastSwitch = g.time; }
+function bolt(x, y, col, n = 6) { for (let i = 0; i < n; i++) bolts.push({ x, y, vx: rand(-160, 160), vy: rand(-260, -60), life: rand(0.3, 0.6), col }); }
+function press(p, key) {
+  if (p.stun > 0) return;
+  const ok = (key === 'blue') === (color === 'blue');
+  if (ok) { p.score += 1; p.bar = clamp(p.bar + 0.12, 0, 1); p.mash = 0.25; if (p.i === 0) { sfx.tap(); bolt(p.x, p.y - 60, color === 'blue' ? palette.blue : palette.gold); } }
+  else { p.score = Math.max(0, p.score - 3); p.bar = clamp(p.bar - 0.3, 0, 1); p.stun = 0.7; if (p.i === 0) sfx.bad(); }
+}
+function setup() {
+  color = Math.random() < 0.5 ? 'blue' : 'gold'; switchT = rand(0.7, 2); flash = 0; bolts = []; lastSwitch = 0;
+  players = NAMES.map((n, i) => ({ i, name: n, score: 0, bar: 0, stun: 0, mash: 0, x: 140 + i * 227, y: 470, acc: rand(0.8, 0.95), delay: rand(0.2, 0.6), rate: rand(6, 10), cd: rand(0, 0.2), seen: color }));
+}
+setup();
+g = Game({ id: 'dynamo', title: '번개 발전기', duration: 30,
+  howto: ['가운데 램프가 파랑이면 A, 노랑이면 L 을 연타!', '색이 바뀌면 재빨리 키를 바꾸세요', '틀린 키를 누르면 전기가 새고 잠시 어지러워요', '30초 후 전기를 가장 많이 모은 홍학이 승리'],
+  init() { setup(); },
+  update(dt) {
+    switchT -= dt; if (switchT <= 0) newColor();
+    flash = Math.max(0, flash - dt);
+    for (const p of players) {
+      p.stun = Math.max(0, p.stun - dt); p.mash = Math.max(0, p.mash - dt); p.bar = Math.max(0, p.bar - dt * 0.15);
+      if (p.i === 0) { if (input.hit('KeyA')) press(p, 'blue'); if (input.hit('KeyL')) press(p, 'gold'); continue; }
+      if (g.time - lastSwitch > p.delay) p.seen = color;
+      p.cd -= dt;
+      if (p.cd <= 0) { p.cd = 1 / p.rate; let k = p.seen; if (Math.random() > p.acc) k = k === 'blue' ? 'gold' : 'blue'; press(p, k); if (k === color) bolt(p.x, p.y - 60, k === 'blue' ? palette.blue : palette.gold, 2); }
+    }
+    for (const b of bolts) { b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt; b.vy += 500 * dt; }
+    bolts = bolts.filter(b => b.life > 0);
+  },
+  draw(ctx) {
+    const W = g.W, H = g.H, col = color === 'blue' ? palette.blue : palette.gold;
+    bg(ctx, W, H, '#2A1F3D', '#4A2E4F');
+    // top dynamo / big bulb
+    ctx.save(); ctx.translate(W / 2, 70);
+    rr(ctx, -70, 30, 140, 24, 6, '#777'); rr(ctx, -50, 50, 100, 16, 4, '#555');
+    const glow = ctx.createRadialGradient(0, 0, 10, 0, 0, 120); glow.addColorStop(0, col); glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow; ctx.globalAlpha = 0.5 + flash * 2; ctx.beginPath(); ctx.arc(0, 0, 120, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, 44, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(-14, -14, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    // center lamp panel
+    rr(ctx, W / 2 - 200, 130, 400, 120, 20, 'rgba(0,0,0,0.35)');
+    rr(ctx, W / 2 - 190, 140, 380, 100, 16, col);
+    text(ctx, color === 'blue' ? '파랑 A' : '노랑 L', W / 2, 212, 64, palette.ink);
+    text(ctx, color === 'blue' ? '◀ 왼쪽' : '오른쪽 ▶', W / 2, 280, 22, col);
+    // wires down to generators
+    ctx.strokeStyle = '#888'; ctx.lineWidth = 3;
+    for (const p of players) { ctx.beginPath(); ctx.moveTo(W / 2, 250); ctx.quadraticCurveTo(p.x, 300, p.x, 360); ctx.stroke(); }
+    // contestants
+    for (const p of players) {
+      const pc = COLS[p.i];
+      rr(ctx, p.x - 80, 300, 160, 230, 14, 'rgba(0,0,0,0.3)');
+      // generator box
+      rr(ctx, p.x - 40, 335, 80, 50, 8, '#666'); rr(ctx, p.x - 30, 345, 60, 30, 6, p.mash > 0 ? col : '#333');
+      // power bar
+      rr(ctx, p.x - 66, 395, 132, 16, 6, '#222'); rr(ctx, p.x - 66, 395, 132 * p.bar, 16, 6, col);
+      text(ctx, p.name, p.x, 325, 18, pc);
+      text(ctx, `${p.score} ⚡`, p.x, 428, 22, palette.cream);
+      const pose = p.stun > 0 ? 'dizzy' : p.mash > 0 ? 'dig' : 'idle';
+      drawFlamingo(ctx, p.x - 10, p.y, 1.5, pose, g.time + p.i, pc);
+      if (p.stun > 0) text(ctx, '어질어질', p.x, 480, 14, palette.red);
+    }
+    // bolts
+    for (const b of bolts) {
+      ctx.save(); ctx.globalAlpha = clamp(b.life * 2, 0, 1); ctx.strokeStyle = b.col; ctx.lineWidth = 3; ctx.translate(b.x, b.y);
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(4, -2); ctx.lineTo(-2, 0); ctx.lineTo(2, 10); ctx.stroke(); ctx.restore();
+    }
+    // ranking hint
+    const lead = [...players].sort((a, b) => b.score - a.score)[0];
+    text(ctx, `현재 1위: ${lead.name}`, W / 2, 32, 20, palette.gold);
+  },
+  result() {
+    const me = players[0]; const best = Math.max(...players.map(p => p.score));
+    const win = me.score >= best && players.filter(p => p.score === best).length === 1;
+    const rank = [...players].sort((a, b) => b.score - a.score).findIndex(p => p.i === 0) + 1;
+    return { score: me.score, text: `전기 ${me.score} ⚡ · ${rank}위`, win };
+  } });
+</script></body></html>

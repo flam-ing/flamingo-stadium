@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>초밥 뷔페 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: SPACE = 앞에 지나가는 접시 잡기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+// ---- belt geometry (rounded rectangle track, clockwise from top-left) ----
+const X0 = 150, Y0 = 105, X1 = 810, Y1 = 435, R = 48;
+const SW = X1 - X0 - 2 * R, SH = Y1 - Y0 - 2 * R, Q = Math.PI * R / 2, L = 2 * SW + 2 * SH + 4 * Q;
+function pos(p) {
+  p = ((p % L) + L) % L; let d = p;
+  if (d < SW) return { x: X0 + R + d, y: Y0 }; d -= SW;
+  if (d < Q) { const a = -Math.PI / 2 + d / R; return { x: X1 - R + Math.cos(a) * R, y: Y0 + R + Math.sin(a) * R }; } d -= Q;
+  if (d < SH) return { x: X1, y: Y0 + R + d }; d -= SH;
+  if (d < Q) { const a = d / R; return { x: X1 - R + Math.cos(a) * R, y: Y1 - R + Math.sin(a) * R }; } d -= Q;
+  if (d < SW) return { x: X1 - R - d, y: Y1 }; d -= SW;
+  if (d < Q) { const a = Math.PI / 2 + d / R; return { x: X0 + R + Math.cos(a) * R, y: Y1 - R + Math.sin(a) * R }; } d -= Q;
+  if (d < SH) return { x: X0, y: Y1 - R - d }; d -= SH;
+  const a = Math.PI + d / R; return { x: X0 + R + Math.cos(a) * R, y: Y0 + R + Math.sin(a) * R };
+}
+const dist = (a, b) => { let d = Math.abs(a - b) % L; return Math.min(d, L - d); };
+// ---- plate types ----
+const TYPES = {
+  cheap: { v: 50, name: '보통 접시', rim: '#D8D8D8', top: '#FFD9B0', eat: 0.3 },
+  normal: { v: 100, name: '연어 접시', rim: '#7FB8E6', top: '#FF9B6A', eat: 0.6 },
+  premium: { v: 300, name: '참치 뱃살', rim: palette.gold, top: '#FF6B7A', eat: 1.5 },
+  giant: { v: 500, name: '초대형 접시', rim: '#B388FF', top: '#FF4F6B', eat: 2.4 },
+  wasabi: { v: -150, name: '와사비 폭탄', rim: '#7BC96F', top: '#3FA34D', eat: 1.0 }
+};
+function pickType() { const r = Math.random(); return r < 0.34 ? 'cheap' : r < 0.62 ? 'normal' : r < 0.77 ? 'premium' : r < 0.95 ? 'wasabi' : 'giant'; }
+// ---- contestants: player at bottom, rivals right / top / left ----
+const ZONE = 30;
+let plates, cons, speed, spawnT, elapsed, seq;
+function makeCon(name, p, color, ax, ay, flip, pref, react) {
+  return { name, p, color, ax, ay, flip, pref, react, score: 0, eat: 0, eatMax: 0, dizzy: 0, target: null, timer: 0, msg: '', msgT: 0 };
+}
+function grab(c, pl) {
+  plates.splice(plates.indexOf(pl), 1); const T = TYPES[pl.type];
+  c.score += T.v; c.eat = c.eatMax = T.eat; c.target = null;
+  c.msg = (T.v > 0 ? '+' : '') + T.v; c.msgT = 1;
+  if (T.v < 0) { c.dizzy = T.eat; if (c === cons[0]) sfx.bad(); } else if (c === cons[0]) sfx.good(); else sfx.tap();
+}
+function reset() {
+    plates = []; speed = 70; spawnT = 0; elapsed = 0; seq = 0;
+    cons = [
+      makeCon('나', SW + Q + SH + Q + SW / 2, palette.pink, 480, 492, false, null, null),
+      makeCon('블루', SW + Q + SH / 2, palette.rivals[0], 895, 262, true, { cheap: 0.15, normal: 0.5, premium: 0.95, giant: 1, wasabi: 0.08 }, [0.25, 0.7]),
+      makeCon('골드', SW / 2, palette.rivals[1], 480, 62, false, { cheap: 0.6, normal: 0.7, premium: 0.7, giant: 0.9, wasabi: 0.2 }, [0.1, 0.4]),
+      makeCon('그린', 2 * SW + 2 * SH + 3 * Q + SH / 2, palette.rivals[2], 65, 262, false, { cheap: 0.45, normal: 0.45, premium: 0.6, giant: 0.8, wasabi: 0.35 }, [0.05, 0.9])
+    ];
+    for (let i = 0; i < 6; i++) plates.push({ p: i * L / 6, type: pickType(), seen: {}, id: seq++ });
+}
+reset();
+g = Game({ id: 'sushi', title: '초밥 뷔페', howto: ['컨베이어 벨트 위 접시가 내 앞(빛나는 구역)을 지날 때 SPACE!', '비싼 접시일수록 먹는 데 오래 걸리고, 와사비 폭탄은 -150', '라이벌 3마리보다 많이 먹으면 승리 · 45초'], duration: 45,
+  init() { reset(); },
+  update(dt) {
+    elapsed += dt; speed = 70 + elapsed * 2.2;
+    for (const pl of plates) pl.p = (pl.p + speed * dt) % L;
+    spawnT -= dt; if (spawnT <= 0 && plates.length < 14) { plates.push({ p: 0, type: pickType(), seen: {}, id: seq++ }); spawnT = rand(0.7, 1.4) * 70 / speed; }
+    for (const c of cons) { c.eat = Math.max(0, c.eat - dt); c.dizzy = Math.max(0, c.dizzy - dt); c.msgT = Math.max(0, c.msgT - dt); }
+    const me = cons[0];
+    if (input.hit('Space') && me.eat <= 0) {
+      const pl = plates.find(q => dist(q.p, me.p) < ZONE);
+      if (pl) grab(me, pl); else { sfx.tick(); me.msg = '헛손질'; me.msgT = 0.6; }
+    }
+    for (let i = 1; i < cons.length; i++) {
+      const c = cons[i]; if (c.eat > 0) { c.target = null; continue; }
+      if (c.target) {
+        if (!plates.includes(c.target) || dist(c.target.p, c.p) >= ZONE) c.target = null;
+        else { c.timer -= dt; if (c.timer <= 0) grab(c, c.target); }
+        continue;
+      }
+      const pl = plates.find(q => !q.seen[i] && dist(q.p, c.p) < ZONE);
+      if (pl) { pl.seen[i] = true; if (Math.random() < c.pref[pl.type]) { c.target = pl; c.timer = rand(c.react[0], c.react[1]); } }
+    }
+  },
+  draw(ctx) {
+    bg(ctx, g.W, g.H, '#FFE9D6', palette.cream);
+    // belt track
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.roundRect(X0, Y0, X1 - X0, Y1 - Y0, R);
+    ctx.strokeStyle = '#6E5A66'; ctx.lineWidth = 46; ctx.stroke();
+    ctx.strokeStyle = '#8C7583'; ctx.lineWidth = 38; ctx.stroke();
+    const off = (elapsed * (speed || 70)) % 28;
+    ctx.setLineDash([14, 14]); ctx.lineDashOffset = -off; ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 30; ctx.stroke();
+    ctx.restore();
+    // grab zones
+    for (const c of cons) {
+      const z = pos(c.p); ctx.save(); ctx.globalAlpha = c === cons[0] ? 0.55 + Math.sin(g.time * 6) * 0.15 : 0.25;
+      ctx.fillStyle = c.color; ctx.beginPath(); ctx.arc(z.x, z.y, ZONE + 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
+    // plates
+    for (const pl of plates) {
+      const T = TYPES[pl.type], q = pos(pl.p), big = pl.type === 'giant' ? 1.4 : 1;
+      ctx.save(); ctx.translate(q.x, q.y); ctx.scale(big, big);
+      ctx.fillStyle = T.rim; ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = palette.white; ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
+      if (pl.type === 'wasabi') { ctx.fillStyle = T.top; ctx.beginPath(); ctx.arc(-3, 1, 6, 0, Math.PI * 2); ctx.arc(3, -2, 5, 0, Math.PI * 2); ctx.arc(2, 4, 4, 0, Math.PI * 2); ctx.fill(); }
+      else { ctx.fillStyle = '#FFFDF5'; ctx.beginPath(); ctx.ellipse(0, 2, 9, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = T.top; ctx.beginPath(); ctx.ellipse(0, -1, 9, 4.5, 0, 0, Math.PI * 2); ctx.fill(); if (pl.type === 'premium' || pl.type === 'giant') { ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.fillRect(-7, -2, 5, 1.5); ctx.fillRect(1, -2, 5, 1.5); } }
+      ctx.restore();
+    }
+    // contestants
+    for (const c of cons) {
+      const pose = c.dizzy > 0 ? 'dizzy' : c.eat > 0 ? 'eat' : 'idle';
+      drawFlamingo(ctx, c.ax, c.ay - 6, 1.05, pose, g.time, c.color, { flip: c.flip });
+      const lx = c.ax + (c.ax < 200 ? 0 : c.ax > 760 ? 0 : 120), ly = c.ax < 200 || c.ax > 760 ? c.ay + 62 : c.ay + 10;
+      text(ctx, c.name, lx, ly - 16, 16, c.color);
+      text(ctx, c.score + '엔', lx, ly + 6, 20, palette.ink);
+      if (c.eat > 0) { rr(ctx, lx - 30, ly + 12, 60, 8, 4, '#E8DCE2'); rr(ctx, lx - 30, ly + 12, 60 * (1 - c.eat / c.eatMax), 8, 4, c.dizzy > 0 ? palette.green : c.color); }
+      if (c.msgT > 0) text(ctx, c.msg, c.ax, c.ay - 50 - (1 - c.msgT) * 20, 20, c.msg[0] === '+' ? palette.pinkDark : palette.red);
+    }
+    // center: legend + belt speed
+    const cx = 480, cy = 210;
+    text(ctx, '접시 가격표', cx, cy, 18, palette.pinkDark);
+    Object.keys(TYPES).forEach((k, i) => {
+      const T = TYPES[k], y = cy + 26 + i * 24, x = cx - 90;
+      ctx.fillStyle = T.rim; ctx.beginPath(); ctx.arc(x, y - 6, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = k === 'wasabi' ? T.top : palette.white; ctx.beginPath(); ctx.arc(x, y - 6, 5, 0, Math.PI * 2); ctx.fill();
+      text(ctx, T.name, x + 16, y, 16, palette.ink, 'left', 'normal');
+      text(ctx, (T.v > 0 ? '+' : '') + T.v + '엔', cx + 90, y, 16, T.v < 0 ? palette.red : palette.ink, 'right');
+    });
+    text(ctx, `벨트 속도 ${Math.round(speed || 70)}`, cx, cy + 165, 16, '#6E5A66', 'center', 'normal');
+    if (g.state() === 'play' && cons[0].eat <= 0) text(ctx, 'SPACE 로 잡기', 480, 470, 14, palette.pinkDark);
+  },
+  result() {
+    const me = cons[0], best = Math.max(...cons.map(c => c.score)), win = me.score >= best && cons.slice(1).every(c => c.score < me.score);
+    const rank = [...cons].sort((a, b) => b.score - a.score).map(c => `${c.name} ${c.score}`).join(' · ');
+    return { score: Math.max(0, me.score), text: `${me.score}엔 먹음 — ${rank}`, win };
+  } });
+</script></body></html>

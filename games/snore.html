@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>코골이 대결 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: SPACE — 시계추가 끝(노란 존)에 닿을 때 누르기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const ZONE = 0.82;            // |sin(phase)| 이상이면 존 안
+const PERFECT = 0.97;
+let birds, phase, speed, round, popups, halfDone, lastHalf, wave, endTimer, result;
+
+function makeBirds() {
+  const cx = g.W / 2, cy = 270;
+  return [
+    { name: '나', x: cx, y: cy + 170, color: palette.pink, sleep: 0, asleep: false, player: true, acc: 1, timer: 0 },
+    { name: '파랑', x: cx - 330, y: cy - 20, color: palette.rivals[0], sleep: 0, asleep: false, acc: rand(0.55, 0.75), timer: rand(1, 3), flip: true },
+    { name: '노랑', x: cx, y: cy - 190, color: palette.rivals[1], sleep: 0, asleep: false, acc: rand(0.6, 0.8), timer: rand(1, 3) },
+    { name: '초록', x: cx + 330, y: cy - 20, color: palette.rivals[2], sleep: 0, asleep: false, acc: rand(0.55, 0.8), timer: rand(1, 3), flip: true },
+  ];
+}
+function reset() { birds = makeBirds(); phase = 0; speed = 2.2; round = 1; popups = []; halfDone = new Set(); lastHalf = 0; wave = null; endTimer = -1; result = null; }
+const awake = () => birds.filter(b => !b.asleep);
+function popup(x, y, s, color) { popups.push({ x, y, s, color, t: 0 }); }
+
+function fallAsleep(b) {
+  b.asleep = true; b.sleep = 1;
+  popup(b.x, b.y - 70, 'zzZ 잠들었다!', palette.purple);
+  round++; speed *= 1.25;
+  if (b.player || awake().length <= 1) { endTimer = 1.2; result = { win: !b.player }; }
+}
+function addSleep(b, amt) {
+  if (b.asleep) return;
+  b.sleep = clamp(b.sleep + amt, 0, 1);
+  if (b.sleep >= 1) fallAsleep(b);
+}
+// 시계추 판정: |sin| 값으로 정확도 계산. 한 번의 흔들림(반주기)당 한 번만 유효.
+function press(b) {
+  const s = Math.abs(Math.sin(phase));
+  const half = Math.floor(phase / Math.PI);
+  if (halfDone.has(half + ':' + (b.player ? 'p' : b.name)) || s < ZONE) {
+    addSleep(b, b.player ? 0.18 : 0.14);
+    popup(b.x, b.y - 60, 'MISS', palette.red); if (b.player) sfx.bad();
+    return;
+  }
+  halfDone.add(half + ':' + (b.player ? 'p' : b.name));
+  const perfect = s >= PERFECT;
+  const power = perfect ? 0.34 : 0.16 + (s - ZONE) / (PERFECT - ZONE) * 0.1;
+  popup(b.x, b.y - 60, perfect ? 'PERFECT' : 'GOOD', perfect ? palette.gold : palette.green);
+  wave = { x: b.x, y: b.y, t: 0, color: b.color };
+  if (b.player) sfx.good(); else sfx.tap();
+  // 최면: 깨어있는 다른 새 전부에게 졸음 (라이벌 최면은 약간 약함)
+  for (const o of birds) if (o !== b) addSleep(o, b.player ? power : power * 0.55);
+}
+
+g = Game({ id: 'snore', title: '코골이 대결',
+  howto: ['가운데 시계추가 끝(노란 존)에 닿는 순간 SPACE!', '정확할수록 라이벌이 더 졸려요 · 헛누르면 내가 졸려요', '라이벌 3마리를 전부 재우면 승리'],
+  duration: 0,
+  init() { reset(); },
+  update(dt) {
+    if (endTimer >= 0) { endTimer -= dt; if (endTimer < 0) g.finish(); return; }
+    phase += speed * dt;
+    speed += dt * 0.04; // 교착 방지용 아주 느린 가속
+    const half = Math.floor(phase / Math.PI);
+    if (half !== lastHalf) { lastHalf = half; sfx.tick(); if (halfDone.size > 40) halfDone.clear(); }
+    if (input.hit('Space')) press(birds[0]);
+    // 라이벌 AI: 존에 들어오면 정확도 확률로 누름, 가끔 존 밖에서 헛누름
+    for (const b of birds) if (!b.player && !b.asleep) {
+      b.timer -= dt;
+      const s = Math.abs(Math.sin(phase));
+      const key = half + ':' + b.name;
+      if (s >= ZONE && !halfDone.has(key) && !b.tried) {
+        b.tried = true;
+        if (Math.random() < b.acc) { const d = Math.random() < 0.5 ? 0 : rand(0.05, 0.25); setTimeout(() => { if (!b.asleep && endTimer < 0) press(b); }, d * 1000); }
+      }
+      if (s < 0.5) b.tried = false;
+      if (b.timer <= 0) { b.timer = rand(2.5, 6); if (s < ZONE && Math.random() < 0.5) press(b); }
+    }
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1);
+    if (wave) { wave.t += dt; if (wave.t > 0.6) wave = null; }
+  },
+  draw(ctx) {
+    bg(ctx, g.W, g.H, '#2E1F3A', '#4A2C4F');
+    const cx = g.W / 2, cy = 270, t = g.time;
+    // 별 배경
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    for (let i = 0; i < 40; i++) { const x = (i * 197) % g.W, y = (i * 131) % 220; ctx.globalAlpha = 0.3 + 0.4 * Math.abs(Math.sin(t * 2 + i)); ctx.fillRect(x, y, 2, 2); }
+    ctx.globalAlpha = 1;
+    // 무대 원
+    rr(ctx, cx - 260, cy - 120, 520, 240, 120, 'rgba(255,246,234,0.08)');
+    // 시계추 (진자)
+    const A = 0.95, ang = A * Math.sin(phase), L = 120, px = cx + Math.sin(ang) * L, py = cy - 40 + Math.cos(ang) * L;
+    // 퍼펙트 존 (양쪽 끝)
+    for (const sgn of [-1, 1]) {
+      const inZone = Math.abs(Math.sin(phase)) >= ZONE && Math.sign(ang) === sgn;
+      const zx = cx + Math.sin(sgn * A) * L, zy = cy - 40 + Math.cos(sgn * A) * L;
+      ctx.beginPath(); ctx.arc(zx, zy, 34, 0, Math.PI * 2);
+      ctx.fillStyle = inZone ? 'rgba(255,209,102,0.45)' : 'rgba(255,209,102,0.12)'; ctx.fill();
+      ctx.strokeStyle = palette.gold; ctx.lineWidth = inZone ? 4 : 2; ctx.setLineDash([6, 6]); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = '#C9B37E'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cx, cy - 40); ctx.lineTo(px, py); ctx.stroke();
+    ctx.fillStyle = '#6B5A3E'; ctx.beginPath(); ctx.arc(cx, cy - 40, 6, 0, Math.PI * 2); ctx.fill();
+    // 회중시계
+    ctx.fillStyle = palette.gold; ctx.beginPath(); ctx.arc(px, py, 24, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = palette.cream; ctx.beginPath(); ctx.arc(px, py, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = palette.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + Math.cos(t * 4) * 12, py + Math.sin(t * 4) * 12); ctx.moveTo(px, py); ctx.lineTo(px + Math.cos(t * 0.5) * 8, py + Math.sin(t * 0.5) * 8); ctx.stroke();
+    // 최면 파동
+    if (wave) { ctx.strokeStyle = wave.color; ctx.globalAlpha = 1 - wave.t / 0.6; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(wave.x, wave.y, 30 + wave.t * 600, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+    // 플라밍고 + 졸음 게이지
+    for (const b of birds) {
+      const pose = b.asleep ? 'sleep' : (b.sleep > 0.7 ? 'dizzy' : 'idle');
+      drawFlamingo(ctx, b.x, b.y, 1.5, pose, t, b.color, { flip: b.flip });
+      const bw = 110, bx = b.x - bw / 2, by = b.y + 60;
+      rr(ctx, bx, by, bw, 14, 7, 'rgba(0,0,0,0.35)');
+      if (b.sleep > 0) rr(ctx, bx, by, bw * b.sleep, 14, 7, b.sleep > 0.7 ? palette.purple : palette.blue);
+      text(ctx, (b.player ? '★ ' : '') + b.name + (b.asleep ? ' (잠듦)' : ''), b.x, by + 32, 16, b.player ? palette.pinkLight : palette.cream);
+    }
+    // 팝업
+    for (const p of popups) { ctx.globalAlpha = 1 - p.t; text(ctx, p.s, p.x, p.y - p.t * 40, 26, p.color); ctx.globalAlpha = 1; }
+    // HUD
+    text(ctx, `라운드 ${round}  ·  속도 x${(speed / 2.2).toFixed(1)}`, 16, 32, 20, palette.cream, 'left');
+    text(ctx, `재운 라이벌 ${birds.filter(b => b.asleep && !b.player).length}/3`, g.W - 16, 32, 20, palette.gold, 'right');
+    text(ctx, '졸음 게이지가 다 차면 잠들어요', cx, g.H - 14, 15, 'rgba(255,246,234,0.6)', 'center', 'normal');
+  },
+  result() {
+    const n = birds.filter(b => b.asleep && !b.player).length;
+    const win = !!(result && result.win);
+    return { score: n, text: win ? `라이벌 ${n}마리를 모두 재웠어요! 최면의 달인` : `잠들어 버렸어요… 재운 라이벌 ${n}마리`, win };
+  } });
+reset(); // 타이틀 화면에서도 draw()가 돌므로 미리 초기화
+</script></body></html>

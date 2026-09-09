@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GAME TITLE · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ...</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+g = Game({ id: 'template', title: 'GAME TITLE', howto: ['설명 한 줄', '설명 두 줄'], duration: 30,
+  init() { }, update(dt) { }, draw(ctx) { bg(ctx, g.W, g.H); }, result() { return { score: 0, text: '점수 0', win: false }; } });
+</script></body></html>

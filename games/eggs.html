@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>알 구조대 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ← → 로 레인 이동 · 알 받기 · 폭탄 피하기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const LANES = 5, LANE_X = i => 120 + i * 135, BELT_Y = 80, BASKET_Y = 430, DURATION = 45;
+const RIVAL_NAMES = ['파랑고', '노랑고', '초록고'];
+let P, items, splats, pops, rivals, spawnT, elapsed, missed, caught, scoreFx;
+
+function resetState() {
+  P = { lane: 2, x: LANE_X(2), tx: LANE_X(2), stun: 0, moving: false, score: 0, face: 1 };
+  items = []; splats = []; pops = []; spawnT = 1.0; elapsed = 0; missed = 0; caught = 0; scoreFx = 0;
+  rivals = RIVAL_NAMES.map((n, i) => ({ name: n, color: palette.rivals[i], score: 0, skill: rand(0.55, 0.8), t: rand(0.5, 1.5), pose: 'idle', poseT: 0 }));
+}
+function spawn(lane) {
+  const r = Math.random(); const type = r < 0.08 ? 'gold' : r < 0.3 ? 'bomb' : 'egg';
+  items.push({ lane, x: LANE_X(lane), y: BELT_Y + 20, vy: 120 + elapsed * 6 + rand(0, 40), type, rot: rand(0, 6.28), spin: rand(-3, 3) });
+}
+function addPop(x, y, s, color) { pops.push({ x, y, s, color, t: 0.8 }); }
+
+function update(dt) {
+  elapsed += dt;
+  // player input
+  if (P.stun > 0) P.stun -= dt;
+  else {
+    if (input.hit('ArrowLeft') && P.lane > 0) { P.lane--; P.face = -1; sfx.tap(); }
+    if (input.hit('ArrowRight') && P.lane < LANES - 1) { P.lane++; P.face = 1; sfx.tap(); }
+  }
+  P.tx = LANE_X(P.lane);
+  const dx = P.tx - P.x; P.x += dx * Math.min(1, dt * 14);
+  P.moving = Math.abs(dx) > 2;
+  // spawn
+  spawnT -= dt;
+  if (spawnT <= 0) {
+    const l = Math.floor(rand(0, LANES)); spawn(l);
+    if (elapsed > 8 && Math.random() < 0.25 + elapsed / 120) { let l2 = Math.floor(rand(0, LANES)); if (l2 === l) l2 = (l2 + 1 + Math.floor(rand(0, 3))) % LANES; spawn(l2); }
+    spawnT = clamp(1.1 - elapsed * 0.016, 0.42, 1.1);
+  }
+  // items
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]; it.y += it.vy * dt; it.rot += it.spin * dt;
+    if (it.y >= BASKET_Y - 18 && it.y <= BASKET_Y + 14 && Math.abs(it.x - P.x) < 42 && P.stun <= 0) {
+      items.splice(i, 1);
+      if (it.type === 'bomb') { P.score -= 2; P.stun = 1; sfx.bad(); addPop(P.x, BASKET_Y - 30, '-2', palette.red); pops.push({ x: P.x, y: BASKET_Y, s: '💥', color: palette.red, t: 0.6 }); }
+      else { const pts = it.type === 'gold' ? 3 : 1; P.score += pts; caught++; scoreFx = 0.3; it.type === 'gold' ? sfx.good() : sfx.tick(); addPop(P.x, BASKET_Y - 30, '+' + pts, it.type === 'gold' ? palette.gold : palette.green); }
+      continue;
+    }
+    if (it.y > g.H - 40) {
+      items.splice(i, 1);
+      if (it.type === 'bomb') { splats.push({ x: it.x, y: g.H - 40, t: 1, bomb: true }); }
+      else { missed++; splats.push({ x: it.x, y: g.H - 40, t: 1.4, gold: it.type === 'gold' }); }
+    }
+  }
+  for (let i = splats.length - 1; i >= 0; i--) { splats[i].t -= dt; if (splats[i].t <= 0) splats.splice(i, 1); }
+  for (let i = pops.length - 1; i >= 0; i--) { pops[i].t -= dt; pops[i].y -= 40 * dt; if (pops[i].t <= 0) pops.splice(i, 1); }
+  if (scoreFx > 0) scoreFx -= dt;
+  // rivals simulation
+  for (const r of rivals) {
+    r.t -= dt; r.poseT -= dt; if (r.poseT <= 0) r.pose = 'idle';
+    if (r.t <= 0) {
+      r.t = rand(0.6, 1.3) - elapsed * 0.006;
+      const roll = Math.random();
+      if (roll < r.skill) { r.score += Math.random() < 0.1 ? 3 : 1; r.pose = 'run'; r.poseT = 0.3; }
+      else if (roll > 0.93) { r.score -= 2; r.pose = 'dizzy'; r.poseT = 0.8; }
+    }
+  }
+}
+
+function drawEgg(ctx, x, y, gold, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot * 0.3);
+  ctx.fillStyle = gold ? palette.gold : palette.white; ctx.strokeStyle = gold ? '#C9962A' : '#D8D0C6'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(0, 0, 13, 17, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.ellipse(-4, -6, 3, 5, 0.3, 0, Math.PI * 2); ctx.fill();
+  if (gold) { ctx.fillStyle = '#fff'; text(ctx, '★', 0, 5, 14, '#fff8'); }
+  ctx.restore();
+}
+function drawBomb(ctx, x, y, rot, t) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.strokeStyle = '#8B5A2B'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(6, -12); ctx.quadraticCurveTo(12, -22, 18, -18); ctx.stroke();
+  ctx.fillStyle = Math.sin(t * 30) > 0 ? palette.gold : palette.red; ctx.beginPath(); ctx.arc(18, -18, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(-5, -5, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawSplat(ctx, s) {
+  ctx.save(); ctx.translate(s.x, s.y); const k = Math.min(1, (1.4 - s.t) * 4 + 0.4); ctx.scale(k, 0.6);
+  if (s.bomb) { ctx.fillStyle = '#444'; for (let i = 0; i < 6; i++) { const a = i * 1.05; ctx.beginPath(); ctx.arc(Math.cos(a) * 14, Math.sin(a) * 8, 5, 0, 6.29); ctx.fill(); } }
+  else {
+    ctx.fillStyle = s.gold ? '#FFE28A' : '#FFF3C4'; ctx.beginPath(); for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; const r = i % 2 ? 22 : 14; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); ctx.fill();
+    ctx.fillStyle = s.gold ? '#FFC93C' : '#FFCF3F'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 6.29); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#D8D0C6'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-18, -6); ctx.lineTo(-10, -14); ctx.lineTo(-4, -6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8, -8); ctx.lineTo(16, -14); ctx.lineTo(18, -4); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawBasket(ctx, x, y) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = '#C98A4B'; ctx.beginPath(); ctx.moveTo(-34, -6); ctx.lineTo(34, -6); ctx.lineTo(26, 22); ctx.lineTo(-26, 22); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#8B5A2B'; ctx.lineWidth = 2; for (let i = -24; i <= 24; i += 12) { ctx.beginPath(); ctx.moveTo(i, -6); ctx.lineTo(i * 0.8, 22); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(-30, 8); ctx.lineTo(30, 8); ctx.stroke();
+  rr(ctx, -38, -12, 76, 10, 4, '#A66A34');
+  ctx.restore();
+}
+
+function draw(ctx) {
+  const t = g.time;
+  bg(ctx, g.W, g.H, palette.sky, palette.cream);
+  // floor
+  ctx.fillStyle = palette.sand; ctx.fillRect(0, g.H - 40, g.W, 40);
+  ctx.fillStyle = '#E7C48C'; for (let x = 0; x < g.W; x += 40) ctx.fillRect(x + (x / 40 % 2) * 20, g.H - 40, 20, 4);
+  // lane guides
+  for (let i = 0; i < LANES; i++) { ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(LANE_X(i) - 50, BELT_Y + 30, 100, g.H - 40 - BELT_Y - 30); }
+  // conveyor belts
+  for (let i = 0; i < LANES; i++) {
+    const x = LANE_X(i);
+    rr(ctx, x - 55, BELT_Y - 14, 110, 28, 8, '#5C5470');
+    ctx.save(); ctx.beginPath(); ctx.roundRect(x - 55, BELT_Y - 14, 110, 28, 8); ctx.clip();
+    ctx.fillStyle = '#7A7290'; const off = (t * 60) % 22; for (let s = -22; s < 120; s += 22) ctx.fillRect(x - 55 + s + off, BELT_Y - 14, 10, 28);
+    ctx.restore();
+    ctx.fillStyle = '#3F3850'; ctx.beginPath(); ctx.arc(x - 47, BELT_Y, 7, 0, 6.29); ctx.arc(x + 47, BELT_Y, 7, 0, 6.29); ctx.fill();
+    rr(ctx, x - 24, BELT_Y - 40, 48, 22, 6, palette.pinkDark); text(ctx, String(i + 1), x, BELT_Y - 23, 16, palette.white);
+  }
+  // splats
+  for (const s of splats) drawSplat(ctx, s);
+  // items
+  for (const it of items) { ctx.save(); ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.beginPath(); ctx.ellipse(it.x, g.H - 38, 14, 4, 0, 0, 6.29); ctx.fill(); ctx.restore(); it.type === 'bomb' ? drawBomb(ctx, it.x, it.y, it.rot, t) : drawEgg(ctx, it.x, it.y, it.type === 'gold', it.rot); }
+  // player
+  const pose = P.stun > 0 ? 'dizzy' : P.moving ? 'run' : 'idle';
+  drawFlamingo(ctx, P.x + (P.face < 0 ? 10 : -10), BASKET_Y + 30, 1.5, pose, t, palette.pink, { flip: P.face < 0 });
+  drawBasket(ctx, P.x, BASKET_Y);
+  if (P.stun > 0) for (let i = 0; i < 3; i++) { const a = t * 6 + i * 2.1; text(ctx, '★', P.x + Math.cos(a) * 30, BASKET_Y - 60 + Math.sin(a) * 8, 16, palette.gold); }
+  // pops
+  for (const p of pops) { ctx.save(); ctx.globalAlpha = Math.min(1, p.t * 2); text(ctx, p.s, p.x, p.y, 24, p.color); ctx.restore(); }
+  // score panel
+  const px = g.W - 210, py = 50;
+  rr(ctx, px, py, 196, 150, 12, 'rgba(58,36,48,0.78)');
+  text(ctx, '🥚 ' + P.score, px + 98, py + 34, 26 + (scoreFx > 0 ? 6 : 0), palette.white);
+  text(ctx, `받음 ${caught} · 놓침 ${missed}`, px + 98, py + 56, 13, palette.pinkLight, 'center', 'normal');
+  const sorted = rivals.slice().sort((a, b) => b.score - a.score);
+  sorted.forEach((r, i) => {
+    const y = py + 84 + i * 22;
+    drawFlamingo(ctx, px + 24, y - 6, 0.38, r.pose, t + i, r.color);
+    text(ctx, r.name, px + 48, y, 15, palette.white, 'left');
+    text(ctx, String(r.score), px + 180, y, 17, r.score > P.score ? palette.gold : palette.white, 'right');
+  });
+  // rank tag
+  const rank = 1 + rivals.filter(r => r.score > P.score).length;
+  rr(ctx, 16, 44, 92, 30, 8, rank === 1 ? palette.green : palette.pinkDark); text(ctx, `${rank}위`, 62, 66, 18, palette.white);
+}
+
+resetState();
+g = Game({ id: 'eggs', title: '알 구조대', howto: ['← → 로 레인을 옮겨 떨어지는 알을 바구니로 받자', '흰 알 +1 · 황금알 +3 · 폭탄은 −2 에 1초 어질어질', '45초 뒤 라이벌 3마리보다 점수가 높으면 승리!'], duration: DURATION,
+  init() { resetState(); }, update, draw,
+  result() { const top = Math.max(...rivals.map(r => r.score)); const win = P.score > top; return { score: P.score, text: win ? `${P.score}점으로 1위! (라이벌 최고 ${top}점)` : `${P.score}점 · 라이벌 최고 ${top}점 · 놓친 알 ${missed}개`, win }; } });
+</script></body></html>

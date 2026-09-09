@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Flamingo Stadium</title>
+<style>
+html,body{margin:0;background:#3A2430;color:#FFF6EA;font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:40px 20px}
+h1{font-size:44px;margin:0;letter-spacing:-.02em}h1 span{color:#FF7BAC}
+p.sub{opacity:.8;margin:8px 0 28px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
+a.card{display:block;background:#FFF6EA;color:#3A2430;border-radius:16px;padding:16px;text-decoration:none;box-shadow:0 12px 30px rgba(0,0,0,.35);transition:transform .15s}
+a.card:hover{transform:translateY(-4px)}
+.card .n{font-size:12px;color:#E2558C;font-weight:700;letter-spacing:.08em}
+.card h2{margin:6px 0 6px;font-size:20px}.card p{margin:0;font-size:13px;color:#6b4a5a;line-height:1.5}
+.card .k{margin-top:10px;font-size:12px;color:#3A2430;background:#FFC1DA;display:inline-block;padding:2px 8px;border-radius:999px}
+canvas.hero{width:100%;max-width:1100px;height:140px;display:block;border-radius:16px;margin-bottom:20px;background:#FFC1DA}
+footer{opacity:.6;font-size:12px;margin-top:32px}
+</style></head>
+<body><div class="wrap">
+<canvas class="hero" id="hero" width="1100" height="140"></canvas>
+<h1>Flamingo <span>Stadium</span></h1>
+<p class="sub">포켓몬 스타디움 미니게임을 플라밍고 스타일로. 키보드로 플레이합니다.</p>
+<div class="grid" id="grid"></div>
+<footer>Vanilla JS · 외부 라이브러리 없음 · 최고 기록은 브라우저에 저장</footer>
+</div>
+<script src="common/stadium.js"></script>
+<script>
+const GAMES=[
+ ['splash','플라밍고 스플래시','SPACE 연타로 점프해 종을 울리기. 30초.','SPACE'],
+ ['says','플라밍고 세이즈','선생님이 보여준 화살표 순서를 따라 누르기.','방향키'],
+ ['run','달려라 플라밍고','←→ 번갈아 달리고 SPACE로 허들 넘기. 40초.','←→ SPACE'],
+ ['snore','코골이 대결','추가 구역에 들어올 때 SPACE. 상대를 재우기.','SPACE'],
+ ['dynamo','번개 발전기','불빛 색에 맞춰 A(파랑)·L(노랑) 연타. 30초.','A L'],
+ ['dig','파! 파! 파!','←→ 번갈아 눌러 땅 파기. 먼저 보물에 닿기.','←→'],
+ ['hoop','링 던지기','←→ 조준, SPACE 길게 눌러 힘 조절 후 던지기.','←→ SPACE'],
+ ['harden','딱딱하게!','바위가 닿는 순간 SPACE를 눌러 굳기. 8웨이브.','SPACE'],
+ ['sushi','초밥 뷔페','앞에 오는 접시를 SPACE로 집기. 와사비 주의.','SPACE'],
+ ['eggs','알 구조대','←→ 로 레인 이동, 알은 받고 폭탄은 피하기.','←→'],
+];
+document.getElementById('grid').innerHTML=GAMES.map(([id,t,d,k],i)=>`<a class="card" href="games/${id}.html"><div class="n">GAME ${String(i+1).padStart(2,'0')}</div><h2>${t}</h2><p>${d}</p><span class="k">${k}</span></a>`).join('');
+const c=document.getElementById('hero'),ctx=c.getContext('2d');let t=0;
+(function loop(){t+=1/60;ctx.clearRect(0,0,c.width,c.height);STADIUM.bg(ctx,c.width,c.height,'#BDEFFF','#FFC1DA');
+ ctx.fillStyle='#7FD3F2';ctx.fillRect(0,105,c.width,35);
+ for(let i=0;i<7;i++){const col=i===3?STADIUM.palette.pink:STADIUM.palette.rivals[i%3];STADIUM.drawFlamingo(ctx,120+i*140,90,1.6,i%2?'run':'idle',t+i,col,{flip:i>3});}
+ requestAnimationFrame(loop);})();
+</script></body></html>

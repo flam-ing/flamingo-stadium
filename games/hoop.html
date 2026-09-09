@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>링 던지기 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ←→ 조준 · SPACE 길게 눌러 파워 · 떼면 던지기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const FIELD_TOP = 60, GROUND_Y = 480, MAXA = 35 * Math.PI / 180, HIT_R = 24, RING_VAL = { 10: palette.green, 30: palette.blue, 50: palette.gold };
+const me = { x: 700, y: GROUND_Y, score: 0, aim: 0, charging: false, charge: 0, power: 0, cool: 0, prevSpace: false, color: palette.pink };
+const ai = { x: 260, y: GROUND_Y, score: 0, aim: 0, cool: 0, color: palette.rivals[0], power: 0, charging: false, charge: 0 };
+let posts = [], rings = [], parts = [], floats = [], wind = 0, windTimer = 0, windShown = 0;
+
+function makePost(side) {
+  const vals = [10, 10, 30, 30, 50]; const v = vals[Math.floor(rand(0, vals.length))];
+  const x0 = side === 'L' ? 60 : 500, x1 = side === 'L' ? 440 : 900;
+  const ymin = v === 50 ? FIELD_TOP + 30 : v === 30 ? FIELD_TOP + 80 : FIELD_TOP + 150;
+  return { side, val: v, x: rand(x0 + 30, x1 - 30), y: rand(ymin, FIELD_TOP + 300), x0, x1, vx: v === 50 ? (Math.random() < .5 ? -1 : 1) * rand(70, 120) : 0, flash: 0 };
+}
+function newWind() { wind = rand(-1, 1); windTimer = 10; windShown = 1.2; }
+function throwRing(p, power, side) {
+  const dist = 130 + power * 400, a = p.aim;
+  const tx = p.x + Math.sin(a) * dist + wind * 70, ty = clamp(p.y - Math.cos(a) * dist, FIELD_TOP + 10, GROUND_Y - 40);
+  rings.push({ sx: p.x, sy: p.y - 30, tx, ty, t: 0, dur: 0.55 + power * 0.35, side, owner: p, done: 0 });
+  sfx.tap();
+}
+function landRing(r) {
+  let hit = null;
+  for (const p of posts) if (p.side === r.side && Math.hypot(p.x - r.tx, p.y - r.ty) < HIT_R) { hit = p; break; }
+  if (hit) {
+    r.owner.score += hit.val; sfx.good(); hit.flash = 0.6;
+    floats.push({ x: hit.x, y: hit.y - 30, s: '+' + hit.val, t: 1, c: RING_VAL[hit.val] });
+    for (let i = 0; i < 18; i++) { const an = rand(0, Math.PI * 2), sp = rand(60, 220); parts.push({ x: hit.x, y: hit.y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, t: rand(.4, .8), c: i % 2 ? palette.pink : RING_VAL[hit.val] }); }
+    const idx = posts.indexOf(hit); posts[idx] = makePost(hit.side);
+  } else { sfx.bad(); floats.push({ x: r.tx, y: r.ty - 10, s: '빗나감', t: .8, c: palette.red }); }
+}
+g = Game({ id: 'hoop', title: '링 던지기',
+  howto: ['←→ 로 조준, SPACE 를 길게 눌러 파워를 모으고 떼면 던지기!', '기둥에 링을 걸면 10 / 30 / 50점 · 바람을 읽으세요', '왼쪽 라이벌보다 높은 점수를 내면 승리 · 45초'], duration: 45,
+  init() {
+    me.score = ai.score = 0; me.aim = ai.aim = 0; me.cool = ai.cool = 0; me.charging = ai.charging = false; me.charge = 0;
+    rings = []; parts = []; floats = []; posts = [];
+    for (let i = 0; i < 6; i++) posts.push(makePost('R')); for (let i = 0; i < 6; i++) posts.push(makePost('L'));
+    newWind(); ai.cool = 1.5;
+  },
+  update(dt) {
+    const t = g.time;
+    windTimer -= dt; if (windTimer <= 0) newWind(); windShown -= dt;
+    // aim
+    if (input.down('ArrowLeft')) me.aim -= dt * 1.6; if (input.down('ArrowRight')) me.aim += dt * 1.6; me.aim = clamp(me.aim, -MAXA, MAXA);
+    // charge / throw
+    me.cool -= dt; const sp = input.down('Space');
+    if (sp && !me.prevSpace && me.cool <= 0) { me.charging = true; me.charge = 0; }
+    if (me.charging) { me.charge += dt * 2.4; me.power = (1 - Math.cos(me.charge * Math.PI)) / 2; }
+    if (!sp && me.prevSpace && me.charging) { me.charging = false; throwRing(me, me.power, 'R'); me.cool = 0.6; }
+    me.prevSpace = sp;
+    // rival AI
+    ai.cool -= dt;
+    if (!ai.charging && ai.cool <= 0) {
+      const tg = posts.filter(p => p.side === 'L'); const p = tg[Math.floor(rand(0, tg.length))];
+      const dx = p.x - ai.x - wind * 70 * rand(0.3, 1), dy = ai.y - p.y, d = Math.hypot(dx, dy);
+      ai.aim = clamp(Math.atan2(dx, dy) + rand(-.06, .06), -MAXA, MAXA); ai.power = clamp((d - 130) / 400 + rand(-.12, .12), 0, 1);
+      ai.charging = true; ai.charge = 0;
+    }
+    if (ai.charging) { ai.charge += dt; if (ai.charge > 0.5) { ai.charging = false; throwRing(ai, ai.power, 'L'); ai.cool = rand(1.3, 2.4); } }
+    // posts move
+    for (const p of posts) { p.flash -= dt; if (p.vx) { p.x += p.vx * dt; if (p.x < p.x0 + 20 || p.x > p.x1 - 20) p.vx *= -1; } }
+    // rings
+    for (const r of rings) { r.t += dt; if (!r.done && r.t >= r.dur) { r.done = 1; landRing(r); } }
+    rings = rings.filter(r => r.t < r.dur + 0.7);
+    for (const p of parts) { p.t -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; } parts = parts.filter(p => p.t > 0);
+    for (const f of floats) { f.t -= dt; f.y -= 30 * dt; } floats = floats.filter(f => f.t > 0);
+  },
+  draw(ctx) {
+    const W = g.W, H = g.H, t = g.time;
+    bg(ctx, W, H, palette.sky, palette.grass);
+    // field
+    ctx.fillStyle = '#A7E69A'; ctx.fillRect(0, FIELD_TOP, W, H - FIELD_TOP);
+    ctx.fillStyle = 'rgba(255,255,255,.18)'; for (let y = FIELD_TOP; y < H; y += 40) ctx.fillRect(0, y, W, 20);
+    ctx.fillStyle = palette.sand; ctx.fillRect(0, GROUND_Y - 30, W, H - GROUND_Y + 30);
+    ctx.strokeStyle = 'rgba(58,36,48,.35)'; ctx.setLineDash([10, 8]); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(480, FIELD_TOP); ctx.lineTo(480, H); ctx.stroke(); ctx.setLineDash([]);
+    // posts (sorted by y for depth)
+    for (const p of [...posts].sort((a, b) => a.y - b.y)) {
+      const s = 0.65 + 0.5 * (p.y - FIELD_TOP) / (GROUND_Y - FIELD_TOP), c = RING_VAL[p.val];
+      ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 4, 16 * s, 6 * s, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = p.flash > 0 ? palette.white : '#4CAF50'; rr(ctx, p.x - 7 * s, p.y - 34 * s, 14 * s, 36 * s, 6 * s, ctx.fillStyle);
+      rr(ctx, p.x - 16 * s, p.y - 24 * s, 9 * s, 14 * s, 4 * s, ctx.fillStyle); rr(ctx, p.x + 7 * s, p.y - 18 * s, 9 * s, 12 * s, 4 * s, ctx.fillStyle);
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(p.x, p.y - 44 * s, 11 * s, 0, Math.PI * 2); ctx.fill();
+      text(ctx, p.val, p.x, p.y - 40 * s, 12 * s, palette.ink);
+    }
+    // landed rings on ground & flying rings
+    for (const r of rings) {
+      const k = clamp(r.t / r.dur, 0, 1), x = r.sx + (r.tx - r.sx) * k, yG = r.sy + 30 + (r.ty - r.sy - 30) * k;
+      const h = Math.sin(k * Math.PI) * 110, s = 1 - 0.45 * (1 - yG / GROUND_Y) * (yG < GROUND_Y ? 1 : 0);
+      if (!r.done) { ctx.fillStyle = 'rgba(0,0,0,.12)'; ctx.beginPath(); ctx.ellipse(x, yG, 18 * s, 7 * s, 0, 0, Math.PI * 2); ctx.fill(); }
+      ctx.strokeStyle = r.owner.color; ctx.lineWidth = 5 * s; ctx.globalAlpha = r.done ? clamp(1 - (r.t - r.dur) / 0.7, 0, 1) : 1;
+      ctx.beginPath(); ctx.ellipse(x, yG - h, 18 * s, (r.done ? 7 : 9) * s, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    for (const p of parts) { ctx.fillStyle = p.c; ctx.globalAlpha = clamp(p.t * 2, 0, 1); ctx.fillRect(p.x - 3, p.y - 3, 6, 6); } ctx.globalAlpha = 1;
+    for (const f of floats) { ctx.globalAlpha = clamp(f.t, 0, 1); text(ctx, f.s, f.x, f.y, 22, f.c); } ctx.globalAlpha = 1;
+    // aim lines
+    for (const p of [me, ai]) {
+      const len = 130 + (p.charging ? p.power : (p === me ? 0.5 : 0)) * 400;
+      ctx.strokeStyle = p === me ? 'rgba(226,85,140,.7)' : 'rgba(90,169,255,.5)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - 30); ctx.lineTo(p.x + Math.sin(p.aim) * len, p.y - 30 - Math.cos(p.aim) * len); ctx.stroke(); ctx.setLineDash([]);
+    }
+    drawFlamingo(ctx, ai.x, ai.y - 30, 1.3, ai.charging ? 'jump' : 'idle', t, ai.color);
+    drawFlamingo(ctx, me.x, me.y - 30, 1.3, me.charging ? 'jump' : 'idle', t, me.color);
+    // power bar
+    rr(ctx, me.x - 70, H - 28, 140, 16, 8, 'rgba(58,36,48,.5)');
+    if (me.charging || me.cool > 0.3) rr(ctx, me.x - 68, H - 26, 136 * me.power, 12, 6, me.power > .85 ? palette.red : palette.gold);
+    text(ctx, me.charging ? '파워!' : me.cool > 0 ? '준비 중...' : 'SPACE 길게', me.x, H - 34, 14, palette.ink);
+    // scores + wind
+    rr(ctx, 12, 44, 200, 34, 10, 'rgba(255,255,255,.75)'); text(ctx, `라이벌  ${ai.score}`, 112, 68, 20, palette.blue);
+    rr(ctx, W - 212, 44, 200, 34, 10, 'rgba(255,255,255,.75)'); text(ctx, `나  ${me.score}`, W - 112, 68, 20, palette.pinkDark);
+    rr(ctx, W / 2 - 90, 8, 180, 34, 10, windShown > 0 && Math.floor(t * 8) % 2 ? palette.gold : 'rgba(255,255,255,.8)');
+    const aw = Math.abs(wind); text(ctx, `바람 ${wind < -0.08 ? '◀' : wind > 0.08 ? '▶' : '―'} ${aw < .08 ? '없음' : aw < .5 ? '약' : '강'}`, W / 2, 32, 18, palette.ink);
+    ctx.fillStyle = palette.ink; ctx.fillRect(W / 2 - 60, 46, 120, 3); ctx.fillStyle = palette.red; ctx.fillRect(W / 2, 44, wind * 60, 7);
+  },
+  result() { const win = me.score > ai.score; return { score: me.score, text: `나 ${me.score} : 라이벌 ${ai.score}  ${win ? '승리!' : me.score === ai.score ? '무승부' : '패배...'}`, win }; } });
+</script></body></html>

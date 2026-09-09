@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>플라밍고 세이즈 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: 방향키 ↑↓←→ 로 순서대로 입력</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const DIRS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+const GLYPH = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+const DCOL = { ArrowUp: palette.blue, ArrowDown: palette.green, ArrowLeft: palette.gold, ArrowRight: palette.purple };
+const SHOW_T = 0.55, GAP_T = 0.2;
+let round = 0, seq = [], phase = 'show', showIdx = -1, showT = 0, inputIdx = 0, limit = 1, timer = 0, flash = 0, msgT = 0, msg = '', failKey = null, lastHit = null;
+let rivals = [0, 1, 2].map(i => ({ color: palette.rivals[i], alive: true, state: 'watch', fallT: 0, progress: 0, failAt: -1 }));
+
+function newRound() {
+  seq = []; const n = 3 + round; for (let i = 0; i < n; i++) seq.push(DIRS[Math.floor(rand(0, 4))]);
+  phase = 'show'; showIdx = -1; showT = 0; inputIdx = 0; limit = 2 + n * 0.9; timer = limit; flash = 0; failKey = null; lastHit = null;
+  rivals.forEach(r => { r.state = r.alive ? 'watch' : 'down'; r.failAt = r.alive && Math.random() < 0.28 ? rand(0.2, 0.8) : -1; r.progress = 0; });
+  msg = `라운드 ${round + 1} · 선생님을 잘 보세요!`; msgT = 1.2;
+}
+
+g = Game({ id: 'says', title: '플라밍고 세이즈', howto: ['선생님 플라밍고가 보여주는 화살표 순서를 기억하세요', '보여주기가 끝나면 방향키로 똑같이 입력!', '틀리거나 시간이 다 되면 탈락 · 8라운드 통과 시 승리'], duration: 0,
+  init() {
+    round = 0; rivals = [0, 1, 2].map(i => ({ color: palette.rivals[i], alive: true, state: 'watch', fallT: 0, progress: 0, failAt: -1 }));
+    newRound();
+  },
+  update(dt) {
+    if (msgT > 0) msgT -= dt; if (flash > 0) flash -= dt;
+    rivals.forEach(r => { if (r.state === 'fall') r.fallT += dt; });
+    if (phase === 'show') {
+      showT -= dt;
+      if (showT <= 0) {
+        showIdx++;
+        if (showIdx >= seq.length) { phase = 'input'; timer = limit; msg = '이제 따라 하세요!'; msgT = 1; return; }
+        showT = SHOW_T + GAP_T; sfx.tap(); flash = SHOW_T;
+        try { beepDir(seq[showIdx]); } catch (e) { }
+      }
+    } else if (phase === 'input') {
+      timer -= dt;
+      const p = 1 - timer / limit;
+      rivals.forEach(r => {
+        if (!r.alive) return;
+        if (r.failAt > 0 && p >= r.failAt) { r.alive = false; r.state = 'fall'; r.fallT = 0; sfx.bad(); }
+        else r.progress = Math.min(seq.length, Math.floor(p * seq.length * 1.3));
+      });
+      if (timer <= 0) { phase = 'fail'; msg = '시간 초과!'; sfx.bad(); g.finish(); return; }
+      for (const d of DIRS) {
+        if (!input.hit(d)) continue;
+        if (d === seq[inputIdx]) { inputIdx++; lastHit = d; flash = 0.25; beepDir(d);
+          if (inputIdx >= seq.length) { phase = 'clear'; round++; sfx.good(); msg = '정답! 다음 라운드'; msgT = 1.1; showT = 1.1; }
+        } else { phase = 'fail'; failKey = d; msg = '틀렸어요!'; sfx.bad(); g.finish(); }
+        break;
+      }
+    } else if (phase === 'clear') { showT -= dt; if (showT <= 0) newRound(); }
+  },
+  draw(ctx) {
+    const W = g.W, H = g.H, t = g.time, isInput = phase === 'input';
+    bg(ctx, W, H, isInput ? '#FFE0EC' : palette.sky, palette.cream);
+    // stage floor
+    rr(ctx, 0, 380, W, 160, 0, palette.grass); rr(ctx, 0, 372, W, 12, 0, '#7CC96F');
+    // rivals on stools (background)
+    rivals.forEach((r, i) => {
+      const x = 150 + i * 150, sy = 400;
+      rr(ctx, x - 22, sy - 10, 44, 10, 3, '#B07A4A'); rr(ctx, x - 14, sy, 6, 34, 2, '#8A5A32'); rr(ctx, x + 8, sy, 6, 34, 2, '#8A5A32');
+      let pose = 'idle', dy = -40, dx = 0, rot = 0;
+      if (r.state === 'fall') { const f = Math.min(1, r.fallT / 0.6); dy = -40 + f * 70; dx = f * 40; rot = f * 1.4; pose = 'dizzy'; }
+      else if (!r.alive) { dy = 30; dx = 40; rot = 1.4; pose = 'dizzy'; }
+      else if (isInput) pose = 'run';
+      ctx.save(); ctx.translate(x + dx, sy + dy); ctx.rotate(rot); drawFlamingo(ctx, 0, 0, 0.9, pose, t + i, r.color); ctx.restore();
+      const label = !r.alive ? '탈락' : isInput ? `${r.progress}/${seq.length}` : '관전 중';
+      text(ctx, label, x, sy + 55, 15, !r.alive ? palette.red : palette.ink);
+    });
+    // teacher podium
+    rr(ctx, 700, 300, 170, 90, 10, '#C98A5A'); rr(ctx, 690, 292, 190, 14, 6, '#E0A66E');
+    drawFlamingo(ctx, 785, 250, 1.4, isInput ? 'idle' : 'jump', t, palette.pinkDark, { flip: true });
+    text(ctx, '선생님', 785, 420, 18, palette.pinkDark);
+    // phase banner
+    const banner = phase === 'show' ? '👀 잘 보세요' : isInput ? '⌨️ 따라 하세요' : phase === 'clear' ? '✅ 성공!' : '❌ 실패';
+    rr(ctx, W / 2 - 150, 14, 300, 44, 22, isInput ? palette.pinkDark : phase === 'fail' ? palette.red : palette.blue);
+    text(ctx, banner, W / 2, 45, 24, palette.white);
+    text(ctx, `라운드 ${round + 1}`, 20, 40, 22, palette.ink, 'left'); text(ctx, `통과 ${round}`, W - 20, 40, 22, palette.ink, 'right');
+    // big arrow (show phase)
+    if (phase === 'show' && showIdx >= 0 && showIdx < seq.length && flash > 0) {
+      const d = seq[showIdx], s = 1 + 0.25 * Math.sin(flash / SHOW_T * Math.PI);
+      ctx.save(); ctx.translate(785, 150); ctx.scale(s, s); rr(ctx, -60, -60, 120, 120, 20, DCOL[d]); text(ctx, GLYPH[d], 0, 32, 90, palette.white); ctx.restore();
+    }
+    // sequence cards
+    const n = seq.length, cw = Math.min(70, (W - 80) / n - 8), x0 = W / 2 - (n * (cw + 8) - 8) / 2, cy = 150;
+    for (let i = 0; i < n; i++) {
+      const x = x0 + i * (cw + 8), d = seq[i];
+      let fill = '#D9D2CC', glyph = '?', gc = palette.white, border = null;
+      if (phase === 'show') { if (i < showIdx) { fill = DCOL[d]; glyph = GLYPH[d]; } else if (i === showIdx) { fill = DCOL[d]; glyph = GLYPH[d]; border = palette.gold; } }
+      else if (isInput) { if (i < inputIdx) { fill = DCOL[d]; glyph = GLYPH[d]; } else if (i === inputIdx) { fill = palette.white; glyph = '?'; gc = palette.ink; border = palette.pinkDark; } }
+      else { fill = DCOL[d]; glyph = GLYPH[d]; if (phase === 'fail' && i === inputIdx) border = palette.red; }
+      if (border) rr(ctx, x - 4, cy - 4, cw + 8, cw + 8, 14, border);
+      rr(ctx, x, cy, cw, cw, 12, fill); text(ctx, glyph, x + cw / 2, cy + cw * 0.72, cw * 0.65, gc);
+    }
+    text(ctx, isInput ? `입력 ${inputIdx} / ${n}` : phase === 'show' ? `${Math.max(0, showIdx + 1)} / ${n} 보여주는 중` : `${n}개 순서`, W / 2, cy + cw + 34, 18, palette.ink);
+    // timer bar (input only)
+    if (isInput) {
+      rr(ctx, W / 2 - 200, 82, 400, 16, 8, '#E8D8D0'); rr(ctx, W / 2 - 200, 82, 400 * clamp(timer / limit, 0, 1), 16, 8, timer < limit * 0.3 ? palette.red : palette.pinkDark);
+      text(ctx, `${timer.toFixed(1)}s`, W / 2 + 230, 96, 16, palette.ink, 'left');
+      if (lastHit && flash > 0) { text(ctx, GLYPH[lastHit], 785, 180, 80, DCOL[lastHit]); }
+    }
+    if (phase === 'fail' && failKey) text(ctx, `${GLYPH[failKey]} 를 눌렀어요 (정답 ${GLYPH[seq[inputIdx]]})`, W / 2, 290, 20, palette.red);
+    if (msgT > 0) text(ctx, msg, W / 2, 300, 26, palette.pinkDark);
+  },
+  result() { return { score: round, text: `${round} 라운드 통과`, win: round >= 8 }; }
+});
+function beepDir(d) { // distinct pitch per direction
+  const f = { ArrowUp: 880, ArrowDown: 440, ArrowLeft: 587, ArrowRight: 740 }[d];
+  try { const a = beepDir.ctx = beepDir.ctx || new (window.AudioContext || window.webkitAudioContext)(); const o = a.createOscillator(), gn = a.createGain(); o.type = 'square'; o.frequency.value = f; gn.gain.value = 0.05; o.connect(gn); gn.connect(a.destination); o.start(); gn.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + 0.15); o.stop(a.currentTime + 0.15); } catch (e) { }
+}
+</script></body></html>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>딱딱하게! · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: SPACE 길게 누르기 = 딱딱해지기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+const TOTAL = 8, LEDGE = 400, XS = [230, 390, 550, 710];
+let g, birds, rocks, wave, waveT, phase, score, stamina, holding, holdStart, popups, shards, over;
+
+function newWave() {
+  wave++; waveT = 0; phase = 'fall'; rocks = [];
+  const fall = Math.max(1.4, 3.2 - wave * 0.22), impact = 1.0 + fall;
+  rocks.push({ fake: false, impact, fall, x: 470, r: 70, hit: false, vx: 0, vy: 0 });
+  const fakes = wave >= 3 ? 1 + (wave >= 6 ? 1 : 0) : 0;
+  for (let i = 0; i < fakes; i++) rocks.push({ fake: true, impact: impact - rand(0.7, 1.6), fall: fall * 0.8, x: rand(180, 760), r: 14, hit: false, vx: 0, vy: 0 });
+  birds.forEach((b, i) => { if (i && b.hp > 0) { b.at = impact + rand(-0.55, 0.28) * (1 + wave * 0.05); b.hardT = -1; b.pose = 'idle'; } });
+}
+function pop(s, x, y, c) { popups.push({ s, x, y, c, life: 1.1 }); }
+function hurt(b, i) {
+  b.hp--; b.pose = 'dizzy'; b.dizzy = 1.2; sfx.bad();
+  if (i === 0) pop('아야!', b.x, LEDGE - 90, palette.red);
+  if (b.hp <= 0) { b.fall = true; b.vy = -150; b.vx = rand(-60, 60); }
+}
+g = Game({ id: 'harden', title: '딱딱하게!', howto: ['바위가 떨어지는 순간에 맞춰 SPACE 를 길게 눌러 딱딱해지세요', '그림자가 커지고 링이 줄어들면 곧 충돌! 작은 돌멩이는 페이크', '스태미나가 바닥나면 풀립니다 · HP 3 · 8 파도를 버티면 승리'], duration: 0,
+  init() {
+    birds = XS.map((x, i) => ({ x, hp: 3, pose: 'idle', dizzy: 0, fall: false, vy: 0, vx: 0, y: LEDGE, hardT: -1, at: 0, color: i ? palette.rivals[i - 1] : palette.pink }));
+    wave = 0; score = 0; stamina = 100; holding = false; holdStart = -9; popups = []; shards = []; over = false; newWave();
+  },
+  update(dt) {
+    waveT += dt; const p = birds[0];
+    // stamina & hardening
+    const want = input.down('Space') && !p.fall && p.dizzy <= 0;
+    if (want && !holding && stamina > 15) { holding = true; holdStart = waveT; sfx.tap(); }
+    if (holding) { stamina -= 55 * dt; if (!want || stamina <= 0) holding = false; } else stamina += 30 * dt;
+    stamina = clamp(stamina, 0, 100);
+    if (!p.fall) p.pose = p.dizzy > 0 ? 'dizzy' : holding ? 'harden' : 'idle';
+    // rivals
+    birds.forEach((b, i) => {
+      if (i === 0 || b.fall) return;
+      b.dizzy -= dt; if (b.dizzy > 0) { b.pose = 'dizzy'; return; }
+      const hard = waveT >= b.at && waveT < b.at + 0.55; b.pose = hard ? 'harden' : 'idle';
+    });
+    p.dizzy -= dt;
+    // rocks
+    for (const r of rocks) {
+      if (!r.hit && waveT >= r.impact) {
+        r.hit = true; r.vx = 260; r.vy = -220; r.y = LEDGE + 20 - r.r;
+        if (r.fake) { shards.push({ x: r.x, y: LEDGE, life: 0.4 }); continue; }
+        sfx.tick(); shards.push({ x: r.x, y: LEDGE, life: 0.8, big: true });
+        birds.forEach((b, i) => {
+          if (b.fall) return;
+          if (b.pose === 'harden') {
+            if (i === 0) { const perfect = r.impact - holdStart <= 0.15; score += perfect ? 300 : 100; pop(perfect ? '완벽!' : '방어!', b.x, LEDGE - 90, perfect ? palette.gold : palette.blue); sfx.good(); }
+          } else hurt(b, i);
+        });
+        phase = 'after';
+      }
+      if (r.hit) { r.vy += 900 * dt; r.x += r.vx * dt; r.y += r.vy * dt; }
+    }
+    birds.forEach(b => { if (b.fall) { b.vy += 700 * dt; b.y += b.vy * dt; b.x += b.vx * dt; } });
+    popups.forEach(o => { o.life -= dt; o.y -= 30 * dt; }); popups = popups.filter(o => o.life > 0);
+    shards.forEach(s => s.life -= dt); shards = shards.filter(s => s.life > 0);
+    if (phase === 'after' && waveT > rocks[0].impact + 1.4) {
+      if (p.hp <= 0) { if (!over) { over = true; g.finish(); } }
+      else if (wave >= TOTAL) { if (!over) { over = true; score += 500; g.finish(); } }
+      else newWave();
+    }
+  },
+  draw(ctx) {
+    bg(ctx, g.W, g.H, '#9ED6F5', palette.cream);
+    // far mountains
+    ctx.fillStyle = '#C9D8E6'; ctx.beginPath(); ctx.moveTo(0, 330); ctx.lineTo(120, 210); ctx.lineTo(260, 300); ctx.lineTo(420, 180); ctx.lineTo(600, 290); ctx.lineTo(760, 200); ctx.lineTo(960, 320); ctx.lineTo(960, 540); ctx.lineTo(0, 540); ctx.fill();
+    // cliff
+    ctx.fillStyle = '#8A7A6A'; ctx.beginPath(); ctx.moveTo(120, LEDGE + 34); ctx.lineTo(820, LEDGE + 34); ctx.lineTo(880, 540); ctx.lineTo(60, 540); ctx.fill();
+    rr(ctx, 130, LEDGE + 26, 680, 22, 8, palette.grass); rr(ctx, 120, LEDGE + 34, 700, 14, 6, '#6E5E50');
+    if (!birds) return;
+    // rocks & telegraph
+    for (const r of rocks) {
+      let y;
+      if (!r.hit) {
+        const k = clamp((waveT - (r.impact - r.fall)) / r.fall, 0, 1); if (k <= 0) continue;
+        y = -r.r + (LEDGE + 20) * k;
+        ctx.fillStyle = `rgba(40,30,30,${0.15 + 0.35 * k})`; ctx.beginPath(); ctx.ellipse(r.x, LEDGE + 30, r.r * (0.4 + 1.1 * k), r.r * 0.18 * (0.4 + 1.1 * k), 0, 0, Math.PI * 2); ctx.fill();
+        if (!r.fake) { ctx.strokeStyle = k > 0.8 ? palette.red : palette.white; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(r.x, LEDGE + 30, 40 + 120 * (1 - k), -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - k)); ctx.stroke(); }
+      } else y = r.y;
+      ctx.fillStyle = r.fake ? '#A79C8E' : '#6F6560'; ctx.beginPath(); ctx.arc(r.x, y, r.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = r.fake ? '#8C8174' : '#59504B'; ctx.beginPath(); ctx.arc(r.x - r.r * 0.3, y + r.r * 0.25, r.r * 0.32, 0, Math.PI * 2); ctx.fill();
+    }
+    shards.forEach(s => { ctx.fillStyle = `rgba(120,110,100,${s.life})`; for (let i = 0; i < (s.big ? 8 : 3); i++) { const a = i / 8 * Math.PI * 2, d = (s.big ? 90 : 30) * (1 - s.life); ctx.beginPath(); ctx.arc(s.x + Math.cos(a) * d, s.y - Math.abs(Math.sin(a)) * d * 0.6, s.big ? 6 : 3, 0, Math.PI * 2); ctx.fill(); } });
+    // flamingos
+    birds.forEach((b, i) => { drawFlamingo(ctx, b.x, b.y, 1.5, b.pose, g.time + i, b.color); if (i === 0 && !b.fall) text(ctx, '▼', b.x, LEDGE - 100, 18, palette.pinkDark); });
+    popups.forEach(o => { ctx.save(); ctx.globalAlpha = Math.min(1, o.life); text(ctx, o.s, o.x, o.y, 40, palette.white); ctx.globalAlpha = Math.min(1, o.life) * 0.9; text(ctx, o.s, o.x, o.y - 2, 40, o.c); ctx.restore(); });
+    // HUD
+    const p = birds[0];
+    text(ctx, '♥'.repeat(Math.max(0, p.hp)) + '♡'.repeat(3 - Math.max(0, p.hp)), 16, 34, 28, palette.red, 'left');
+    rr(ctx, 16, 46, 204, 18, 9, 'rgba(0,0,0,0.25)'); rr(ctx, 18, 48, 200 * stamina / 100, 14, 7, stamina > 15 ? palette.green : palette.red); text(ctx, '스태미나', 226, 61, 16, palette.ink, 'left');
+    text(ctx, `파도 ${wave} / ${TOTAL}`, g.W / 2, 34, 24, palette.ink);
+    text(ctx, `점수 ${score}`, g.W - 16, 34, 24, palette.ink, 'right');
+    if (holding) text(ctx, '딱딱!', p.x, LEDGE - 120, 20, '#7E6C88');
+  },
+  result() { const alive = birds.filter(b => !b.fall).length - (birds[0].fall ? 0 : 1); const win = birds[0].hp > 0; return { score, text: win ? `모든 파도를 버텼다! 점수 ${score} · 남은 라이벌 ${alive}` : `${wave}번째 파도에서 절벽 아래로… 점수 ${score}`, win }; } });
+</script></body></html>

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>파! 파! 파! · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ← → 번갈아 누르기</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+const DEPTH = 100, STEP = 44, SURF = 150, COLS = 4, CW = 200, GAP = 24, SAFETY = 45;
+const STRATA = ['#B9834E', '#A66F3F', '#8F5B33', '#7A4A2A', '#63391F', '#4E2B16'];
+const RANK_PTS = [100, 60, 30, 10];
+let g, diggers, camY, popups, elapsed, ranks, finishedBy;
+
+function colX(i) { return (g.W - (COLS * CW + (COLS - 1) * GAP)) / 2 + i * (CW + GAP); }
+function makeCells() {
+  const c = [];
+  for (let i = 0; i < DEPTH; i++) { const r = Math.random(); c.push(i < 3 ? 0 : r < 0.08 ? 1 : r < 0.11 ? 2 : 0); } // 0 dirt, 1 rock, 2 gold
+  return c;
+}
+function pop(x, y, s, color) { popups.push({ x, y, s, color, life: 0.8 }); }
+function dig(d, key) {
+  if (d.done) return;
+  if (key === d.last) { if (d.player) { pop(d.cx, d.y() - 60, '!', palette.red); sfx.bad(); } return; }
+  d.last = key; d.digT = 0.25;
+  const cell = d.cells[d.depth];
+  if (cell === 1 && d.hits < 3) { d.hits++; if (d.player) sfx.tap(); return; }
+  d.hits = 0; d.depth++;
+  if (cell === 2) { d.depth = Math.min(DEPTH, d.depth + 3); pop(d.cx, d.y() - 70, '+3 황금!', palette.gold); if (d.player) sfx.good(); }
+  else if (d.player) sfx.tap();
+  if (d.depth >= DEPTH) { d.depth = DEPTH; d.done = true; ranks.push(d); finishedBy = finishedBy || d; }
+}
+function playerRank() { const p = diggers[0]; return diggers.filter(d => d !== p && (d.depth > p.depth || (d.depth === p.depth && d.done && !p.done))).length + 1; }
+
+g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 눌러 땅을 파세요', '같은 키를 연속으로 누르면 헛삽질!', '바위는 4번, 황금은 보너스 3칸', '깊이 100의 보물상자에 먼저 닿으면 승리'], duration: 0,
+  init() {
+    camY = 0; popups = []; elapsed = 0; ranks = []; finishedBy = null;
+    const names = ['나', '파랑', '노랑', '초록'];
+    diggers = names.map((n, i) => ({
+      name: n, player: i === 0, color: i === 0 ? palette.pink : palette.rivals[i - 1], cells: makeCells(), depth: 0, hits: 0, last: null, digT: 0, done: false,
+      cx: colX(i) + CW / 2, y() { return SURF + this.depth * STEP; }, rhythm: rand(0.19, 0.3), timer: rand(0.5, 1.2), nextKey: 'L'
+    }));
+  },
+  update(dt) {
+    elapsed += dt;
+    const p = diggers[0];
+    if (input.hit('ArrowLeft')) dig(p, 'L');
+    if (input.hit('ArrowRight')) dig(p, 'R');
+    for (const d of diggers) {
+      d.digT = Math.max(0, d.digT - dt);
+      if (d.player || d.done) continue;
+      d.timer -= dt;
+      if (d.timer <= 0) {
+        const goof = Math.random() < 0.08; // occasional mistake: repeat key
+        dig(d, goof ? d.last : d.nextKey); if (!goof) d.nextKey = d.nextKey === 'L' ? 'R' : 'L';
+        d.timer = d.rhythm * rand(0.55, 1.6);
+      }
+    }
+    const deepest = Math.max(...diggers.map(d => d.depth));
+    const target = Math.max(0, SURF + deepest * STEP - g.H * 0.55);
+    camY += (target - camY) * Math.min(1, dt * 6);
+    for (const q of popups) { q.life -= dt; q.y -= dt * 40; }
+    popups = popups.filter(q => q.life > 0);
+    if (finishedBy || elapsed >= SAFETY) g.finish();
+  },
+  draw(ctx) {
+    if (!diggers) this.init();
+    bg(ctx, g.W, g.H, palette.sky, '#E8D2A8');
+    // sky decorations
+    text(ctx, '☁', 120, 60 - camY * 0.3, 40, palette.white); text(ctx, '☁', 780, 40 - camY * 0.3, 32, palette.white);
+    const cy = camY;
+    for (let i = 0; i < COLS; i++) {
+      const d = diggers[i], x = colX(i);
+      // dirt column
+      const top = Math.max(0, SURF - cy), bottom = SURF + DEPTH * STEP + 90 - cy;
+      const first = Math.max(0, Math.floor((cy - SURF) / STEP)), lastC = Math.min(DEPTH - 1, Math.ceil((cy + g.H - SURF) / STEP));
+      for (let k = first; k <= lastC; k++) {
+        const y = SURF + k * STEP - cy;
+        ctx.fillStyle = STRATA[Math.min(STRATA.length - 1, Math.floor(k / 17))]; ctx.fillRect(x, y, CW, STEP + 1);
+        if (k < d.depth) { ctx.fillStyle = 'rgba(30,15,8,0.55)'; ctx.fillRect(x + 20, y, CW - 40, STEP + 1); continue; }
+        // pebbles texture
+        ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(x + ((k * 37) % 150) + 15, y + 12, 8, 5); ctx.fillRect(x + ((k * 71) % 140) + 25, y + 30, 6, 4);
+        if (d.cells[k] === 1) {
+          ctx.fillStyle = '#8E8E8E'; ctx.beginPath(); ctx.ellipse(x + CW / 2, y + STEP / 2, 60, 17, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#B5B5B5'; ctx.beginPath(); ctx.ellipse(x + CW / 2 - 12, y + STEP / 2 - 5, 25, 7, -0.2, 0, Math.PI * 2); ctx.fill();
+          if (k === d.depth && d.hits > 0) { ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.beginPath(); for (let c = 0; c < d.hits; c++) { const sx = x + CW / 2 - 30 + c * 30; ctx.moveTo(sx, y + 6); ctx.lineTo(sx + 8, y + 18); ctx.lineTo(sx - 4, y + 28); ctx.lineTo(sx + 6, y + 40); } ctx.stroke(); }
+        } else if (d.cells[k] === 2) {
+          ctx.fillStyle = palette.gold; ctx.beginPath(); ctx.moveTo(x + CW / 2 - 18, y + 30); ctx.lineTo(x + CW / 2 - 8, y + 10); ctx.lineTo(x + CW / 2 + 14, y + 12); ctx.lineTo(x + CW / 2 + 20, y + 32); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = palette.white; ctx.fillRect(x + CW / 2 - 4, y + 16, 5, 5);
+        }
+      }
+      // chest at bottom
+      const chestY = SURF + DEPTH * STEP - cy;
+      if (chestY < g.H + 60) {
+        ctx.fillStyle = '#3B2414'; ctx.fillRect(x, chestY, CW, 90);
+        rr(ctx, x + CW / 2 - 40, chestY + 14, 80, 54, 8, '#B4642E'); rr(ctx, x + CW / 2 - 40, chestY + 14, 80, 18, 8, '#D68A45');
+        ctx.fillStyle = palette.gold; ctx.fillRect(x + CW / 2 - 8, chestY + 30, 16, 14); ctx.fillStyle = '#7A3B14'; ctx.fillRect(x + CW / 2 - 40, chestY + 32, 80, 4);
+      }
+      // wall shading
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(x, top, 8, bottom - top); ctx.fillRect(x + CW - 8, top, 8, bottom - top);
+      // digger
+      const fy = d.y() - cy - 12;
+      const pose = d.done ? 'jump' : d.digT > 0 ? 'dig' : 'idle';
+      drawFlamingo(ctx, d.cx - 6, fy, 0.9, pose, g.time + i, d.color);
+      // name tag
+      const tagY = clamp(fy - 70, 60, g.H - 20);
+      rr(ctx, d.cx - 44, tagY - 18, 88, 26, 8, 'rgba(255,255,255,0.85)');
+      text(ctx, `${d.name} ${d.depth}m`, d.cx, tagY, 16, d.player ? palette.pinkDark : palette.ink);
+      if (d.done) text(ctx, `${ranks.indexOf(d) + 1}위`, d.cx, tagY - 26, 22, palette.gold);
+    }
+    for (const q of popups) { ctx.save(); ctx.globalAlpha = Math.min(1, q.life * 2); text(ctx, q.s, q.x, q.y - camY * 0 , 30, q.color); ctx.restore(); }
+    // HUD
+    rr(ctx, 12, 10, 300, 40, 10, 'rgba(255,255,255,0.8)');
+    const p = diggers[0];
+    text(ctx, `깊이 ${p.depth} / ${DEPTH}   현재 ${playerRank()}위`, 162, 38, 20, palette.ink);
+    if (g.state() === 'play') { rr(ctx, g.W - 132, 10, 120, 40, 10, 'rgba(255,255,255,0.8)'); text(ctx, `${Math.max(0, SAFETY - elapsed).toFixed(0)}s`, g.W - 72, 38, 20, palette.ink); }
+    if (g.state() === 'play' && elapsed < 3 && p.depth === 0) { text(ctx, '← → 번갈아!', p.cx, SURF - 96, 24, palette.pinkDark); }
+  },
+  result() {
+    const p = diggers[0], r = playerRank(); let score = RANK_PTS[r - 1];
+    const timeout = !finishedBy; if (timeout) score += p.depth;
+    return { score, win: r === 1, text: timeout ? `시간 초과! ${r}위 · 깊이 ${p.depth} → ${score}점` : `${r}위로 도착! ${score}점` };
+  } });
+</script></body></html>

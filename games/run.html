@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>달려라 플라밍고 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ← → 번갈아 달리기 · SPACE 점프</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, Game, input, sfx, bg, text, rr, rand, clamp } = STADIUM;
+let g;
+const LANES = 4, LANE_TOP = 56, LANE_H = 121, RUN_X = 150, PXM = 38; // pixels per meter
+const MAX_SPD = 14, GRAV = 1500, JUMP_V = 520, HURDLE_W = 0.35, DIZZY_T = 0.8;
+const NAMES = ['파랑', '노랑', '초록', '나(핑크)'];
+let runners = [], elapsed = 0;
+
+function makeRunner(i) {
+  const player = i === LANES - 1;
+  return { lane: i, player, color: player ? palette.pink : palette.rivals[i], name: NAMES[i],
+    dist: 0, speed: 0, y: 0, vy: 0, dizzy: 0, trips: 0, lastKey: '', hurdles: [], nextH: rand(6, 10),
+    skill: rand(7.5, 11.5), wobble: rand(0, 6), jumpSkill: rand(0.8, 0.96), aiJumped: false };
+}
+function spawnHurdles(r) { while (r.nextH < r.dist + 40) { r.hurdles.push({ d: r.nextH, hit: false }); r.nextH += rand(5.5, 11) * clamp(1 - elapsed / 60, 0.55, 1); } }
+function airborne(r) { return r.y < -22; }
+function trip(r) {
+  r.dizzy = DIZZY_T; r.speed = 0; r.dist = Math.max(0, r.dist - 2.5); r.trips++; r.y = 0; r.vy = 0;
+  if (r.player) sfx.bad();
+}
+function step(r, dt) {
+  spawnHurdles(r);
+  if (r.dizzy > 0) { r.dizzy -= dt; }
+  else if (r.player) {
+    // alternate LEFT/RIGHT to build speed
+    const L = input.hit('ArrowLeft'), R = input.hit('ArrowRight');
+    if ((L && r.lastKey !== 'L') || (R && r.lastKey !== 'R')) { r.lastKey = L ? 'L' : 'R'; r.speed = Math.min(MAX_SPD, r.speed + 1.35); sfx.tap(); }
+    r.speed -= r.speed * 0.75 * dt;
+    if (input.hit('Space') && r.y === 0) { r.vy = -JUMP_V; r.y = -1; sfx.tick(); }
+  } else {
+    // AI: chase a wobbling target speed, jump when a hurdle is near
+    const target = r.skill * (0.85 + 0.15 * Math.sin(g.time * 0.9 + r.wobble)) * clamp(1 + elapsed / 80, 1, 1.4);
+    r.speed += (target - r.speed) * 1.8 * dt;
+    const near = r.hurdles.find(h => !h.hit && h.d - r.dist > 0 && h.d - r.dist < 0.28 * r.speed + 0.6);
+    if (near && r.y === 0 && !near.judged) {
+      near.judged = true;
+      if (Math.random() < r.jumpSkill) { r.vy = -JUMP_V * rand(0.9, 1.05); r.y = -1; }
+    }
+  }
+  // jump physics
+  if (r.y < 0 || r.vy < 0) { r.vy += GRAV * dt; r.y += r.vy * dt; if (r.y >= 0) { r.y = 0; r.vy = 0; } }
+  r.dist += r.speed * dt;
+  // collisions
+  for (const h of r.hurdles) {
+    if (!h.hit && Math.abs(h.d - r.dist) < HURDLE_W && !airborne(r) && r.dizzy <= 0) { h.hit = true; trip(r); break; }
+    if (!h.hit && h.d < r.dist - HURDLE_W) h.hit = true;
+  }
+  r.hurdles = r.hurdles.filter(h => h.d > r.dist - 6);
+}
+
+function drawLane(ctx, r) {
+  const top = LANE_TOP + r.lane * LANE_H, ground = top + LANE_H - 28;
+  // lane background
+  ctx.fillStyle = r.player ? '#FFE3EE' : (r.lane % 2 ? '#FFF6EA' : '#FBEBD3');
+  ctx.fillRect(0, top, g.W, LANE_H);
+  // treadmill belt with scrolling stripes
+  rr(ctx, 0, ground, g.W, 26, 0, '#6B5566');
+  ctx.save(); ctx.beginPath(); ctx.rect(0, ground, g.W, 26); ctx.clip();
+  const off = (r.dist * PXM) % 60;
+  ctx.fillStyle = '#8A7186';
+  for (let x = -off - 60; x < g.W + 60; x += 60) { ctx.beginPath(); ctx.moveTo(x, ground); ctx.lineTo(x + 26, ground); ctx.lineTo(x + 10, ground + 26); ctx.lineTo(x - 16, ground + 26); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  ctx.fillStyle = r.color; ctx.fillRect(0, ground - 3, g.W, 3);
+  // hurdles
+  for (const h of r.hurdles) {
+    const x = RUN_X + (h.d - r.dist) * PXM; if (x < -30 || x > g.W + 30) continue;
+    ctx.save(); ctx.translate(x, ground);
+    if (h.hit && Math.abs(h.d - r.dist) < 2) ctx.rotate(0.9);
+    ctx.strokeStyle = '#8B5E34'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(-10, -34); ctx.moveTo(10, 0); ctx.lineTo(10, -34); ctx.stroke();
+    ctx.strokeStyle = palette.white; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-14, -30); ctx.lineTo(14, -30); ctx.stroke();
+    ctx.strokeStyle = palette.red; ctx.lineWidth = 6; ctx.setLineDash([8, 8]); ctx.beginPath(); ctx.moveTo(-14, -30); ctx.lineTo(14, -30); ctx.stroke();
+    ctx.restore();
+  }
+  // flamingo
+  const pose = r.dizzy > 0 ? 'dizzy' : (airborne(r) ? 'jump' : (r.speed > 0.4 ? 'run' : 'idle'));
+  const kb = r.dizzy > 0 ? -Math.sin(r.dizzy / DIZZY_T * Math.PI) * 26 : 0;
+  drawFlamingo(ctx, RUN_X + kb, ground - 36 + r.y, 1.05, pose, g.time, r.color);
+  if (r.dizzy > 0) text(ctx, '★ 휘청 ★', RUN_X + kb, ground - 96 + r.y, 16, palette.red);
+  // label + distance
+  rr(ctx, 12, top + 8, 112, 26, 8, r.color);
+  text(ctx, r.name, 68, top + 27, 16, r.player ? palette.ink : palette.white);
+  text(ctx, `${r.dist.toFixed(1)} m`, g.W - 16, top + 30, 22, palette.ink, 'right');
+  text(ctx, `${r.speed.toFixed(1)} m/s`, g.W - 16, top + 52, 14, '#7A6272', 'right', 'normal');
+}
+function drawGauge(ctx, p) {
+  const x = 340, y = 24, w = 280, h = 16;
+  rr(ctx, x - 2, y - 2, w + 4, h + 4, 8, palette.ink);
+  rr(ctx, x, y, w, h, 6, '#5A4653');
+  const f = clamp(p.speed / MAX_SPD, 0, 1);
+  if (f > 0) rr(ctx, x, y, w * f, h, 6, f > 0.8 ? palette.gold : f > 0.45 ? palette.green : palette.pink);
+  text(ctx, '속도', x - 12, y + 14, 16, palette.ink, 'right');
+  text(ctx, p.lastKey === 'L' ? '→ 를 누르세요' : '← 를 누르세요', x + w + 12, y + 14, 15, palette.pinkDark, 'left');
+}
+function ranking() { return [...runners].sort((a, b) => b.dist - a.dist); }
+
+g = Game({ id: 'run', title: '달려라 플라밍고',
+  howto: ['← → 를 번갈아 눌러 러닝머신 위를 달리세요', 'SPACE 로 허들을 뛰어넘고, 40초 동안 가장 멀리 가면 승리!', '허들에 걸리면 휘청거리며 뒤로 밀려납니다'],
+  duration: 40,
+  init() { elapsed = 0; runners = []; for (let i = 0; i < LANES; i++) runners.push(makeRunner(i)); },
+  update(dt) { elapsed += dt; for (const r of runners) step(r, dt); },
+  draw(ctx) {
+    bg(ctx, g.W, g.H, palette.sky, palette.cream);
+    for (const r of runners) drawLane(ctx, r);
+    for (let i = 1; i < LANES; i++) { ctx.fillStyle = 'rgba(58,36,48,0.18)'; ctx.fillRect(0, LANE_TOP + i * LANE_H - 1, g.W, 2); }
+    const p = runners[LANES - 1];
+    if (p && g.state() === 'play') {
+      drawGauge(ctx, p);
+      const rank = ranking().indexOf(p) + 1;
+      text(ctx, `현재 ${rank}위`, g.W / 2, g.H - 12, 18, rank === 1 ? palette.pinkDark : palette.ink);
+    }
+  },
+  result() {
+    const p = runners[LANES - 1], order = ranking(), rank = order.indexOf(p) + 1, score = Math.round(p.dist);
+    const win = rank === 1;
+    return { score, text: win ? `${score} m 달려서 1위! 넘어짐 ${p.trips}회` : `${score} m · ${rank}위 (1위 ${order[0].name} ${Math.round(order[0].dist)} m)`, win };
+  } });
+</script></body></html>
