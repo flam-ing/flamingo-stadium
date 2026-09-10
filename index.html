@@ -14,29 +14,29 @@ a.card:hover{transform:translateY(-4px)}
 .card .k{margin-top:10px;font-size:12px;color:#3A2430;background:#FFC1DA;display:inline-block;padding:2px 8px;border-radius:999px}
 canvas.hero{width:100%;max-width:1100px;height:140px;display:block;border-radius:16px;margin-bottom:20px;background:#FFC1DA}
 footer{opacity:.6;font-size:12px;margin-top:32px}
+h3.sec{margin:28px 0 12px;font-size:16px;color:#FFC1DA;letter-spacing:.06em}
+.tip{background:#4a3040;border-radius:12px;padding:12px 16px;font-size:13px;line-height:1.7;margin-bottom:8px}.tip b{color:#FFD166}
 </style></head>
 <body><div class="wrap">
 <canvas class="hero" id="hero" width="1100" height="140"></canvas>
 <h1>Flamingo <span>Stadium</span></h1>
-<p class="sub">포켓몬 스타디움 미니게임을 플라밍고 스타일로. 키보드로 플레이합니다.</p>
+<p class="sub">포켓몬 스타디움 1·2 키즈 클럽 미니게임 21종을 플라밍고 스타일로. 한 키보드로 1~4명이 같이 합니다.</p>
+<div class="tip"><b>같이 하기</b> 게임 타이틀에서 숫자 <b>1~4</b>를 눌러 사람 수를 정하고, <b>K</b>를 눌러 각자 키를 바꿀 수 있습니다. 기본 키는 1P 방향키+SPACE/ENTER, 2P WASD+C/V, 3P IJKL+,/., 4P TFGH+B/N 입니다. 설정은 모든 게임에 같이 적용됩니다.</div>
+<h3 class="sec">스타디움 1 · 키즈 클럽</h3>
 <div class="grid" id="grid"></div>
+<h3 class="sec">스타디움 2 · 키즈 클럽</h3>
+<div class="grid" id="grid2"></div>
 <footer>Vanilla JS · 외부 라이브러리 없음 · 최고 기록은 브라우저에 저장</footer>
 </div>
+<script src="games.js"></script>
 <script src="common/stadium.js"></script>
 <script>
-const GAMES=[
- ['splash','플라밍고 스플래시','SPACE 연타로 점프해 종을 울리기. 30초.','SPACE'],
- ['says','플라밍고 세이즈','선생님이 보여준 화살표 순서를 따라 누르기.','방향키'],
- ['run','달려라 플라밍고','←→ 번갈아 달리고 SPACE로 허들 넘기. 40초.','←→ SPACE'],
- ['snore','코골이 대결','추가 구역에 들어올 때 SPACE. 상대를 재우기.','SPACE'],
- ['dynamo','번개 발전기','불빛 색에 맞춰 A(파랑)·L(노랑) 연타. 30초.','A L'],
- ['dig','파! 파! 파!','←→ 번갈아 눌러 땅 파기. 먼저 보물에 닿기.','←→'],
- ['hoop','링 던지기','←→ 조준, SPACE 길게 눌러 힘 조절 후 던지기.','←→ SPACE'],
- ['harden','딱딱하게!','바위가 닿는 순간 SPACE를 눌러 굳기. 8웨이브.','SPACE'],
- ['sushi','초밥 뷔페','앞에 오는 접시를 SPACE로 집기. 와사비 주의.','SPACE'],
- ['eggs','알 구조대','←→ 로 레인 이동, 알은 받고 폭탄은 피하기.','←→'],
-];
-document.getElementById('grid').innerHTML=GAMES.map(([id,t,d,k],i)=>`<a class="card" href="games/${id}.html"><div class="n">GAME ${String(i+1).padStart(2,'0')}</div><h2>${t}</h2><p>${d}</p><span class="k">${k}</span></a>`).join('');
+const GAMES=window.GAMES_DATA||[];
+const sec=(s)=>`<h3 class="sec">${s}</h3>`;
+const card=(g,i)=>`<a class="card" href="games/${g.id}.html"><div class="n">GAME ${String(i+1).padStart(2,'0')} · ${g.orig}</div><h2>${g.title}</h2><p>${g.blurb}</p><span class="k">${g.controls}</span></a>`;
+const s1=GAMES.filter(g=>g.series===1), s2=GAMES.filter(g=>g.series===2);
+document.getElementById('grid').innerHTML=s1.map((g,i)=>card(g,i)).join('');
+document.getElementById('grid2').innerHTML=s2.map((g,i)=>card(g,i+s1.length)).join('');
 const c=document.getElementById('hero'),ctx=c.getContext('2d');let t=0;
 (function loop(){t+=1/60;ctx.clearRect(0,0,c.width,c.height);STADIUM.bg(ctx,c.width,c.height,'#BDEFFF','#FFC1DA');
  ctx.fillStyle='#7FD3F2';ctx.fillRect(0,105,c.width,35);

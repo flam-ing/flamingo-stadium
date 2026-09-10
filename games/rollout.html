@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>돌돌 레이스 · Flamingo Stadium</title><link rel="stylesheet" href="../common/style.css"></head>
+<body><div class="wrap"><canvas id="game"></canvas><div class="bar"><a href="../index.html">← 스타디움</a><span>조작: ↑↓←→ 방향 전환 · A 버튼 회오리 설치</span></div></div>
+<script src="../common/stadium.js"></script>
+<script>
+const { palette, drawFlamingo, drawPlayerTag, Game, sfx, text, rr, rand, clamp, lerp, slots } = STADIUM;
+// 원작 Rampage Rollout (specs/rollout.md): 탑다운 오벌 트랙 9바퀴, 90° Snake식 조작(자동 전진), 결승선 통과 시 순위별 회오리 지급(1위 0·2위 1·3위 2·4위 3),
+// 타인 회오리 접촉 = 1.2s 정지, 벽(울타리) 접촉 = 정지, 9바퀴째는 몸을 말아 구르기 ×1.35. 제한 시간 없음 — 첫 완주 즉시 종료(2s 뒤 finish), 180s 안전장치.
+const OX = 120, OY = 70, OW = 720, OH = 430, R = 60, TW = 96, M = 14; // 바깥 트랙 사각·코너 반경·트랙 폭·캐릭터 중심 여유 (§6)
+const IX = OX + TW, IY = OY + TW, IW = OW - 2 * TW, IH = OH - 2 * TW; // 안쪽 잔디섬 216,166 528×238
+const CX0 = OX + TW / 2, CX1 = OX + OW - TW / 2, CY0 = OY + TW / 2, CY1 = OY + OH - TW / 2; // 중심선 x 168/792 · y 118/452
+const FX = 480, S0 = [0, CX1 - FX, CX1 - FX + CY1 - CY0, CX1 - FX + CY1 - CY0 + CX1 - CX0], PERIM = S0[3] + CY1 - CY0 + FX - CX0; // 섹터 시작 거리, 둘레 1916
+const V = 270, ROLL = 1.35, LAPS = 9, STUN = 1.2, INV = 0.3, ACC = 0.4, CLIFE = 20, CMAX = 12, HITR = 26, LIMIT = 180, SC = 0.42; // §3~5 [추정] 상수
+const DX = [1, 0, -1, 0], DY = [0, -1, 0, 1], DIRS = ['right', 'up', 'left', 'down']; // 0 R · 1 U · 2 L · 3 D = 반시계 주행 순서 = 섹터(하·우·상·좌) 순서
+const CEN = [CY1, CX1, CY0, CX0], SGN = [-1, -1, 1, 1], END = [CX1, CY0, CX0, CY1], ESGN = [-1, 1, 1, -1], INC = [3, 0, 3, 0], DEC = [1, 2, 1, 2]; // 섹터별 가로축 중심·안쪽 부호·코너선·가로축 ± 방향
+// CPU 모델 (§8 표): d = 코너 반응 지연 [평균, σ] s, over = 오버런(벽 박힘) 확률, inset = 인코스 px, dodge = 회오리 회피 확률, R = 뒤 R px 내 상대 있을 때 설치, mis = 아무 때나 설치 확률/초
+const AI = { normal: { d: [.22, .08], over: .15, inset: 12, dodge: .45, R: 90, mis: .06 }, hard: { d: [.13, .04], over: .06, inset: 24, dodge: .7, R: 120, mis: .02 }, vhard: { d: [.08, .03], over: .02, inset: 30, dodge: .85, R: 150, mis: .005 } };
+const gauss = (m, s) => m + s * Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(Math.PI * 2 * Math.random());
+const hudX = i => 20 + i * 230;
+let g, P, clouds, parts, flies, note, goal, elapsed, over, overT, winner, timeout, order;
+
+function onTrack(x, y) { // 캐릭터 중심이 흙길 위인가 (바깥 둥근 사각 안 · 잔디섬 밖, 여유 M)
+  if (x < OX + M || x > OX + OW - M || y < OY + M || y > OY + OH - M) return false;
+  if (x > IX - M && x < IX + IW + M && y > IY - M && y < IY + IH + M) return false;
+  const cx = x < OX + R ? OX + R : x > OX + OW - R ? OX + OW - R : null, cy = y < OY + R ? OY + R : y > OY + OH - R ? OY + OH - R : null;
+  return cx == null || cy == null || (x - cx) ** 2 + (y - cy) ** 2 <= (R - M) ** 2;
+}
+function sectorOf(x, y) { // 하 0 · 우 1 · 상 2 · 좌 3. 코너 사각은 섬 모서리 기준 대각선으로 분할
+  const rt = x >= IX + IW, bt = y >= IY + IH;
+  if (y > IY && y < IY + IH) return rt ? 1 : 3; if (x > IX && x < IX + IW) return bt ? 0 : 2;
+  const u = (rt ? x - IX - IW : IX - x) / TW, v = (bt ? y - IY - IH : IY - y) / TW;
+  return rt && bt ? (u > v ? 1 : 0) : rt ? (v > u ? 2 : 1) : bt ? (v > u ? 0 : 3) : (u > v ? 3 : 2);
+}
+function distOf(p) { // 결승선부터 중심선을 따라 잰 거리 s (§4). 아직 한 바퀴를 안 돈(seq 0) 결승선 왼쪽은 음수 = 출발 대기 구간
+  const { x, y, sec } = p;
+  if (sec === 0) return x >= FX ? clamp(x - FX, 0, S0[1]) : p.seq ? S0[3] + CY1 - CY0 + clamp(x - CX0, 0, FX - CX0) : x - FX;
+  return sec === 1 ? S0[1] + clamp(CY1 - y, 0, CY1 - CY0) : sec === 2 ? S0[2] + clamp(CX1 - x, 0, CX1 - CX0) : S0[3] + clamp(y - CY0, 0, CY1 - CY0);
+}
+function tryTurn(p, d) { // 90° 전환만. 역방향(180°) 무시, 스턴 중엔 마지막 입력 1개만 버퍼
+  if (d === p.dir || d === (p.dir + 2) % 4 || over) return;
+  if (p.stun > 0) { p.buf = d; return; }
+  p.dir = d; p.stuck = false; if (p.human) sfx.beep(660, 0.03, 'square', 0.025);
+}
+function place(p) { // A 버튼 1회 = 회오리 1개, 진행 반대쪽 36px (트랙 밖이면 제자리). 설치자 본인은 영구 면역
+  if (p.hold <= 0 || over) return; p.hold--;
+  let x = p.x - DX[p.dir] * 36, y = p.y - DY[p.dir] * 36; if (!onTrack(x, y)) { x = p.x; y = p.y; }
+  clouds.push({ x, y, owner: p.i, life: CLIFE, age: 0 }); if (clouds.length > CMAX) clouds.shift(); sfx.pop();
+}
+function burst(x, y, n, c, grav) { for (let k = 0; k < n; k++) parts.push({ x, y, vx: rand(-170, 170), vy: rand(grav ? -260 : -160, grav ? -60 : 160), life: rand(0.4, 0.9), c: c || palette.players[k % 4], g: grav, r: grav ? 4 : 3 }); }
+function hitP(p) { p.stun = STUN; p.stuck = false; p.buf = -1; sfx.hit(); burst(p.x, p.y, 8, '#8f6a3a', 0); } // 피격: 1.2s 정지(앞 0.6s 두 바퀴 회전) + 해제 후 0.4s 가속
+function lapDone(p) { // 결승선 정방향 통과(4섹터 순서 경유 후): 바퀴 +1 → 순위별 회오리 지급(상한 3) → 8바퀴째 구르기 → 9바퀴 골인
+  p.lap++; p.lapPop = 0.2; sfx.tick();
+  const award = Math.min(p.rank - 1, 3 - p.hold);
+  if (award > 0) { for (let k = 0; k < award; k++) flies.push({ x0: FX, y0: CY1, x1: hudX(p.i) + 80 + (p.hold + k) * 18, y1: 45, t: -k * 0.08, c: p.color }); p.hold += award; sfx.good(); }
+  if (p.lap === LAPS - 1) { p.roll = true; note = { s: `${p.name} 구르기!`, life: 0.8 }; sfx.beep(660, 0.08, 'square', 0.15); setTimeout(() => sfx.beep(660, 0.08, 'square', 0.15), 110); }
+  if (p.lap >= LAPS) { over = true; overT = 2; winner = p.i; goal = `${p.name} 완주!`; sfx.win(); burst(FX, CY1, 20, null, 1); }
+}
+function humanCtl(p) { // 방향키 hit 우선, down도 인정(홀드 지원). A/B hit = 설치
+  const k = g.p(p.i); let want = -1;
+  for (let d = 0; d < 4; d++) if (k.hit(DIRS[d])) want = d;
+  if (want < 0) for (let d = 0; d < 4; d++) if (k.down(DIRS[d]) && d !== p.dir) want = d;
+  if (want >= 0) tryTurn(p, want);
+  if (k.hit('a') || k.hit('b')) place(p);
+}
+function aiCtl(p, dt) { // 웨이포인트 주행 + 반응 지연 + 실수: 인코스 레인을 유지하다 코너선(선행 lead 만큼 미리 감지, 평균 8px 늦게) 에서 90° 전환
+  if (p.stun > 0) return;
+  const a = AI[p.lv], sd = p.sec, nxt = (sd + 1) % 4, spd = V * p.varf * (p.roll ? ROLL : 1) * p.acc, lead = spd * a.d[0]; // 실제 속도 기준 선행 거리 (스턴 후 가속 중엔 짧게)
+  p.laneT -= dt; if (p.laneT <= 0) p.laneOff = 0; p.laneCd -= dt;
+  const ins = a.inset + p.laneOff, lat = sd % 2 ? p.x : p.y, tgt = CEN[sd] + SGN[sd] * ins, line = END[sd] + ESGN[sd] * ins;
+  const along = (line - (sd % 2 ? p.y : p.x)) * (DX[sd] + DY[sd]), off = Math.abs(lat - tgt), toward = (p.dir === INC[sd]) === (lat < tgt);
+  let want = -1, corner = false;
+  if (p.dir === sd) { // 직진 중: 코너선 감지(평균 8px 늦게 꺾음) / 레인 이탈 시 가로 이동 계획(back = 복귀 지연, 짧은 이동은 톡 치듯 정확히)
+    if (along <= lead - 8 || p.stuck) { want = nxt; corner = true; }
+    else if (off > 16 && p.laneCd <= 0) { want = lat < tgt ? INC[sd] : DEC[sd]; p.back = clamp(gauss(a.d[0], a.d[1] / 2), 0.03, off / Math.max(60, spd)); }
+  }
+  else if (p.dir === nxt && along <= lead * 2) want = p.stuck ? sd : -1; // 코너를 이미 꺾었는데 섹터가 아직 안 바뀜 — 그대로 (섬에 박혔으면 잠깐 되돌아감)
+  else if (p.dir === (sd + 2) % 4) want = lat < tgt ? INC[sd] : DEC[sd]; // 역주행 → 가로로 빠져나감
+  else if (!toward || off <= spd * p.back + 1 || p.stuck) { want = sd; p.laneCd = 0.6; } // 레인 이동 중: 남은 거리가 back 동안 갈 거리면 복귀 예약
+  if (want < 0) p.pend = -1;
+  else if (want !== p.pend) { p.pend = want; p.pendT = Math.max(0.02, corner ? gauss(a.d[0], a.d[1]) * (Math.random() < a.over ? 3 : 1) : want === sd ? p.back + gauss(0, a.d[1] / 2) : gauss(a.d[0], a.d[1] / 2)); }
+  if (p.pend >= 0) { // 지연이 끝나면 전환. 울타리 쪽으로 꺾는 건 멈춰 있을 때만(달리는 중엔 안전해질 때까지 직진 — 늦게 꺾는 실수는 오버런 롤이 담당). Very Hard: 구르기 중 코너마다 소진
+    if (p.stuck) p.pendT = Math.min(p.pendT, 0.15); p.pendT -= dt;
+    if (p.pendT <= 0 && (p.stuck || onTrack(p.x + DX[p.pend] * 8, p.y + DY[p.pend] * 8))) { tryTurn(p, p.pend); p.pend = -1; if (p.lv === 'vhard' && p.roll) place(p); }
+  }
+  for (const c of clouds) { // 전방 120px 안의 타인 회오리: 난이도 확률로 회오리 반대쪽 40px 레인으로 비켜 감 (회오리마다 1회 판정)
+    if (c.owner === p.i || p.seen === c) continue;
+    const fw = (c.x - p.x) * DX[p.dir] + (c.y - p.y) * DY[p.dir], lx = Math.abs((c.x - p.x) * DY[p.dir]) + Math.abs((c.y - p.y) * DX[p.dir]);
+    if (fw > 0 && fw < 120 && lx < HITR + 8) { p.seen = c; if (Math.random() < a.dodge) { const pin = (lat - CEN[sd]) * SGN[sd], cin = ((sd % 2 ? c.x : c.y) - CEN[sd]) * SGN[sd]; p.laneOff = clamp(pin + (cin >= pin ? -40 : 40), -30, 30) - a.inset; p.laneT = 0.9; p.laneCd = 0; } }
+  }
+  p.think -= dt; if (p.think <= 0) { p.think = 0.25; if (p.hold > 0 && (Math.random() < a.mis * 0.25 || P.some(q => q !== p && (q.x - p.x) ** 2 + (q.y - p.y) ** 2 < a.R * a.R && (q.x - p.x) * DX[p.dir] + (q.y - p.y) * DY[p.dir] < 0))) place(p); }
+}
+function step(p, dt) {
+  p.lapPop -= dt; p.shake -= dt; p.inv -= dt;
+  if (p.stun > 0) { if (p.stun > STUN - 0.6) p.rot += Math.PI * 4 / 0.6 * dt; p.stun -= dt; if (p.stun <= 0) { p.inv = INV; p.acc = 0; if (p.buf >= 0) tryTurn(p, p.buf); p.buf = -1; } return; }
+  p.acc = Math.min(1, p.acc + dt / ACC); const px = p.x, ux = DX[p.dir], uy = DY[p.dir];
+  if (!p.stuck) { // 1px 단위 전진 — 울타리에 닿으면 그 자리에서 정지(속도 0), 방향키를 기다린다
+    let d = V * p.varf * (p.roll ? ROLL : 1) * p.acc * dt;
+    while (d > 0) { const s = Math.min(1, d); if (onTrack(p.x + ux * s, p.y + uy * s)) { p.x += ux * s; p.y += uy * s; d -= s; } else { p.stuck = true; p.shake = 0.15; sfx.beep(180, 0.06, 'square', p.human ? 0.08 : 0.03); break; } }
+    if (p.roll) p.rot += 12 * dt;
+    p.dustT += dt; if (p.dustT > 0.05) { p.dustT = 0; parts.push({ x: p.x - ux * 10 + rand(-4, 4), y: p.y + 6 + rand(-3, 3), vx: -ux * 40 + rand(-25, 25), vy: -uy * 40 + rand(-25, 25), life: 0.35, c: '#c9a26b', r: 3 }); }
+  }
+  const ns = sectorOf(p.x, p.y); // 섹터 순서(0→1→2→3) 경유 여부 seq — 결승선만 왕복하는 꼼수 방지
+  if (ns !== p.sec) { if (ns === (p.sec + 1) % 4) p.seq = Math.min(3, p.seq + 1); else if (ns === (p.sec + 3) % 4) p.seq = Math.max(0, p.seq - 1); p.sec = ns; }
+  if (p.sec === 0) { if (px < FX && p.x >= FX) { if (p.seq >= 3) lapDone(p); p.seq = 0; } else if (px >= FX && p.x < FX && p.lap > 0) { p.lap--; p.seq = 3; p.roll = p.lap >= LAPS - 1; } }
+}
+function tickFx(dt) {
+  for (const q of parts) { if (q.g) q.vy += 700 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; } parts = parts.filter(q => q.life > 0);
+  for (const f of flies) f.t += dt; flies = flies.filter(f => f.t < 0.3);
+  if (note) { note.life -= dt; if (note.life <= 0) note = null; }
+}
+function emblem(ctx, x, y, r, c) { // 회오리 문양 엠블럼 (HUD 보유 아이콘)
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.strokeStyle = palette.white; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let k = 0; k < 24; k++) { const a = k * 0.5, rd = r * 0.15 + k * r * 0.03; ctx[k ? 'lineTo' : 'moveTo'](x + Math.cos(a) * rd, y + Math.sin(a) * rd); } ctx.stroke();
+}
+
+g = Game({ id: 'rollout', title: '돌돌 레이스', howto: ['↑↓←→ 로 방향을 꺾어 트랙을 9바퀴 도세요 (울타리에 닿으면 멈춰요)', '결승선을 지날 때 순위가 낮을수록 회오리를 더 받아요 (2위 1 · 3위 2 · 4위 3)', 'A 버튼으로 회오리를 뒤에 놓아 상대를 멈추세요 · 마지막 바퀴는 구르기!'], duration: 0,
+  init() {
+    // 항상 4마리, 결승선 30px 앞에 트랙 폭 방향 4열(1P가 가장 안쪽). CPU는 남는 슬롯 순서대로 보통 → 어려움 → 어려움/매우 어려움(반반), 개체 속도 편차 ±4%
+    const cpu = ['normal', 'hard', Math.random() < 0.5 ? 'hard' : 'vhard']; let c = 0;
+    P = slots().map((s, i) => ({ ...s, x: FX - 30, y: CY1 - 33 + i * 22, dir: 0, sec: 0, seq: 0, lap: 0, prog: 0, rank: i + 1, hold: 0, stun: 0, inv: 0, acc: 1, stuck: false, roll: false, rot: 0, buf: -1, shake: 0, lapPop: 0, dustT: 0,
+      varf: s.human ? 1 : rand(0.96, 1.04), lv: s.human ? '' : cpu[c++], pend: -1, pendT: 0, back: 0.1, think: rand(0, 0.25), laneOff: 0, laneT: 0, laneCd: 0.5, seen: null }));
+    clouds = []; parts = []; flies = []; note = null; goal = null; elapsed = 0; over = false; overT = 0; winner = 0; timeout = false; order = [0, 1, 2, 3];
+  },
+  update(dt) {
+    if (over) { overT -= dt; tickFx(dt); if (overT <= 0) g.finish(); return; } // 골인 후 2s 정지 연출 (회오리·경과시간 동결)
+    elapsed += dt; if (elapsed > LIMIT) { timeout = true; g.finish(); return; }
+    for (const p of P) { p.human ? humanCtl(p) : aiCtl(p, dt); step(p, dt); if (over) break; }
+    clouds = clouds.filter(c => { // 최초 접촉자 1명(슬롯 순)만 맞히고 소멸. 설치자·스턴 중·무적 중은 제외
+      c.age += dt; c.life -= dt; if (c.life <= 0) return false;
+      for (const p of P) if (p.i !== c.owner && p.stun <= 0 && p.inv <= 0 && (p.x - c.x) ** 2 + (p.y - c.y) ** 2 < HITR * HITR) { hitP(p); return false; }
+      return true;
+    });
+    for (const p of P) p.prog = p.lap + distOf(p) / PERIM;
+    order = P.map(p => p.i).sort((a, b) => P[b].prog - P[a].prog || a - b); order.forEach((pi, k) => P[pi].rank = k + 1);
+    tickFx(dt);
+  },
+  draw(ctx) {
+    // 잔디 → 흙길(둥근 사각) → 잔디섬 → 흰 라인 → 울타리 말뚝(점선) → 꽃 → 체크 결승선
+    ctx.fillStyle = '#5cb85c'; ctx.fillRect(0, 0, g.W, g.H); ctx.fillStyle = 'rgba(255,255,255,.07)'; for (let y = 0; y < g.H; y += 48) ctx.fillRect(0, y, g.W, 24);
+    rr(ctx, OX, OY, OW, OH, R, '#d9b27a'); rr(ctx, IX, IY, IW, IH, 12, '#7ccf6a');
+    ctx.strokeStyle = palette.white; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(OX + 1.5, OY + 1.5, OW - 3, OH - 3, R); ctx.roundRect(IX - 1.5, IY - 1.5, IW + 3, IH + 3, 12); ctx.stroke();
+    ctx.save(); ctx.setLineDash([4, 20]); ctx.lineWidth = 6; ctx.beginPath(); ctx.roundRect(OX - 7, OY - 7, OW + 14, OH + 14, R + 7); ctx.roundRect(IX + 7, IY + 7, IW - 14, IH - 14, 8); ctx.stroke(); ctx.restore();
+    for (let k = 0; k < 14; k++) { ctx.fillStyle = [palette.gold, palette.white, palette.pinkLight][k % 3]; ctx.beginPath(); ctx.arc(IX + 30 + (k * 137) % (IW - 60), IY + 24 + (k * 89) % (IH - 48), 3, 0, 7); ctx.fill(); }
+    for (let y = IY + IH, k = 0; y < OY + OH; y += 8, k++) { ctx.fillStyle = k % 2 ? palette.white : '#222'; ctx.fillRect(FX - 8, y, 8, 8); ctx.fillStyle = k % 2 ? '#222' : palette.white; ctx.fillRect(FX, y, 8, 8); }
+    if (!P) return;
+    for (const c of clouds) { // 회오리: 갈색 반투명 원 4개 나선 회전(하나는 설치자 색 틴트) + 흙 알갱이, 0.2s 동안 0→1 스케일, 소멸 2s 전부터 옅어짐
+      const s = Math.min(1, c.age / 0.2), al = Math.min(1, c.life / 2); ctx.save(); ctx.translate(c.x, c.y); ctx.scale(s, s);
+      for (let k = 0; k < 4; k++) { const an = g.time * 5 + k * 1.6, rd = 4 + k * 3; ctx.globalAlpha = al * (k === 3 ? 0.5 : 0.35); ctx.fillStyle = k === 3 ? palette.players[c.owner] : '#b8894f'; ctx.beginPath(); ctx.arc(Math.cos(an) * rd, Math.sin(an) * rd, 18 - k * 3, 0, 7); ctx.fill(); }
+      ctx.globalAlpha = al; ctx.fillStyle = '#8f6a3a'; for (let k = 0; k < 5; k++) { const an = -g.time * 7 + k * 1.26; ctx.beginPath(); ctx.arc(Math.cos(an) * 14, Math.sin(an) * 14 - 4, 2, 0, 7); ctx.fill(); } ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    [...P].sort((a, b) => a.y - b.y || a.i - b.i).forEach(p => { // 아래쪽(y 큰) 캐릭터를 나중에 그림. 포즈: 주행 run · 벽 정지 idle · 구르기 ball(회전) · 피격 dizzy · 종료 1위 jump/4위 sleep
+      const win = over && p.rank === 1, pose = over ? (win ? 'jump' : p.rank === 4 ? 'sleep' : 'idle') : p.stun > 0 ? 'dizzy' : p.roll ? 'ball' : p.stuck ? 'idle' : 'run';
+      const fx = p.x + (p.shake > 0 ? rand(-2, 2) : 0), fy = p.y - (win ? Math.abs(Math.sin(g.time * 6)) * 16 : 0), face = p.dir === 1 ? -Math.PI / 2 : p.dir === 3 ? Math.PI / 2 : 0;
+      drawFlamingo(ctx, fx, fy, pose === 'ball' ? 0.5 : SC, pose, g.time + p.i, p.color, { flip: p.dir === 2 && !over, rot: over ? 0 : pose === 'ball' ? p.rot : face + (p.stun > 0 ? p.rot : 0) });
+      drawPlayerTag(ctx, p.x, p.y - 34, p.i);
+      for (let k = 0; k < (p.stun > 0 ? 3 : p.hold); k++) { const an = g.time * 4 + k * 2.1; text(ctx, '★', p.x + Math.cos(an) * 12, p.y - 46 + Math.sin(an) * 4, 11, p.stun > 0 ? palette.white : palette.gold); } // 머리 위 회전 별 = 보유 회오리 / 피격 별
+    });
+    for (const q of parts) { ctx.globalAlpha = clamp(q.life * 2, 0, 1); ctx.fillStyle = q.c; ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, 7); ctx.fill(); } ctx.globalAlpha = 1;
+    for (const f of flies) if (f.t >= 0) { const k = f.t / 0.3; emblem(ctx, lerp(f.x0, f.x1, k), lerp(f.y0, f.y1, k) - Math.sin(k * Math.PI) * 40, 9, f.c); } // 지급 엠블럼이 결승선에서 HUD로 날아감
+    P.forEach((p, i) => { // HUD 패널 4개: 배지 · n/9 바퀴(팝) · 순위 · 엠블럼 3칸 · 구르기 배지. 선두 패널은 금테
+      const x = hudX(i); rr(ctx, x, 8, 220, 52, 12, 'rgba(255,255,255,.88)');
+      if (p.rank === 1) { ctx.strokeStyle = palette.gold; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(x, 8, 220, 52, 12); ctx.stroke(); }
+      drawPlayerTag(ctx, x + 36, 24, i);
+      ctx.save(); ctx.translate(x + 74, 30); const s = p.lapPop > 0 ? 1 + p.lapPop * 2 : 1; ctx.scale(s, s); text(ctx, `${p.lap}/${LAPS} 바퀴`, 0, 0, 17, palette.ink, 'left'); ctx.restore();
+      text(ctx, `${p.rank}위`, x + 210, 30, 17, p.rank === 1 ? palette.pinkDark : palette.ink, 'right');
+      for (let k = 0; k < 3; k++) { const ex = x + 80 + k * 18; if (k < p.hold) emblem(ctx, ex, 45, 7, p.color); else { ctx.strokeStyle = 'rgba(58,36,48,.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ex, 45, 6, 0, 7); ctx.stroke(); } }
+      if (p.roll) { rr(ctx, x + 146, 36, 64, 18, 9, '#FF8A3D'); text(ctx, '구르기!', x + 178, 49, 12, palette.white); }
+    });
+    if (note) { ctx.globalAlpha = Math.min(1, note.life * 3); text(ctx, note.s, g.W / 2, 262, 26, '#FF8A3D'); ctx.globalAlpha = 1; }
+    if (goal) { ctx.save(); ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 6; ctx.strokeStyle = palette.ink; ctx.strokeText(goal, g.W / 2, 305); ctx.fillStyle = palette.gold; ctx.fillText(goal, g.W / 2, 305); ctx.restore(); }
+    else if (g.state() === 'play' && elapsed < 6) text(ctx, '↑↓←→ 로 꺾고 · A 버튼으로 회오리를 뒤에!', g.W / 2, 292, 16, palette.ink);
+    text(ctx, elapsed.toFixed(1).padStart(4, '0'), g.W / 2, 528, 15, palette.ink);
+  },
+  result() { // 순위 점수 100/60/30/10. 골인 프레임의 진행도(바퀴 + 거리) 순, 동률은 슬롯 순
+    const sc = []; order.forEach((pi, k) => sc[pi] = [100, 60, 30, 10][k]);
+    return { scores: sc, text: timeout ? '시간 종료!' : `${P[winner].name} 9바퀴 완주! (${elapsed.toFixed(1)}초)` };
+  } });
+</script></body></html>
