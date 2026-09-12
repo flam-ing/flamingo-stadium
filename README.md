@@ -1,5 +1,7 @@
 # Flamingo Stadium 🦩
 
+[![PLAY NOW](https://img.shields.io/badge/PLAY%20NOW-GitHub%20Pages-4caf50?style=for-the-badge&logo=githubpages&logoColor=white)](https://minwoo19930301.github.io/flamingo-stadium/) [![SOURCE CODE](https://img.shields.io/badge/SOURCE%20CODE-minwoo19930301-e7322d?style=for-the-badge&logo=github&logoColor=white)](https://github.com/minwoo19930301/flamingo-stadium)
+
 포켓몬 스타디움 1·2의 미니게임을 플라밍고 스타일로 다시 만든 웹 미니게임 모음입니다. 빌드도 서버도 없이 `index.html`을 열면 됩니다. 바닐라 JS, 외부 라이브러리 없음.
 
 | # | 게임 | 원작 미니게임 | 조작 |
