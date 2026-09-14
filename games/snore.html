@@ -6,37 +6,38 @@
 <script>
 const { palette, drawFlamingo, drawPlayerTag, Game, sfx, bg, text, rr, rand, clamp, slots } = STADIUM;
 // 원작 Snore War (specs/snore.md): 추 θ = 55°·sin φ, φ' = ω = min(16, 2.6·1.05^t) — 중앙 통과 순간마다 갱신(통과 사이엔 일정).
-// 판정은 입력 시각과 가장 가까운 중앙 통과 시각의 차 e: PERFECT e ≤ max(asin .12/ω, 17ms), GOOD ≤ max(asin .30/ω, 34ms), 그 밖은 MISS.
-// 통과당 입력 1회만 유효. MISS 는 자기 졸림 +0.25 와 2반주기 코골이 스턴. 같은 통과에 성공한 최면은 하나의 파동(가장 강한 것)으로 합쳐져
-// 그 통과에 성공 못 한 깨어 있는 전원이 맞는다(성공자끼리는 면역). 코 고는 동안은 파동을 한 번만 맞는다 — 스펙 구현 노트 참조.
+// 판정은 입력 시각과 가장 가까운 중앙 통과 시각의 차 e: PERFECT e ≤ max(asin .12/ω, 28ms), GOOD ≤ max(asin .30/ω, 75ms), 그 밖은 MISS.
+// 통과당 입력 1회만 유효. MISS 는 자기 졸림 +0.10 과 2반주기 코골이 스턴. 같은 통과에 성공한 최면은 하나의 파동(가장 강한 것)으로 합쳐져
+// 그 통과에 성공 못 한 깨어 있는 전원이 맞는다(성공자끼리는 면역). 코 고는 중에도 파동을 모두 맞는다 — 스펙 구현 노트 참조.
 const PIVOT = { x: 480, y: 120 }, ROD = 200, AMP = 55 * Math.PI / 180, W0 = 2.6, WMAX = 16, SAFETY = 90;
-const HIT_PERFECT = 0.34, HIT_GOOD = 0.20, MISS_SELF = 0.25;
+const HIT_PERFECT = 0.22, HIT_GOOD = 0.14, MISS_SELF = 0.10, PF_MIN = 0.028, GD_MIN = 0.075; // 판정창 하한 28/75ms
 const POS = [{ x: 300, y: 430, s: 1.6 }, { x: 660, y: 430, s: 1.6, flip: true }, { x: 200, y: 250, s: 1.36 }, { x: 760, y: 250, s: 1.36, flip: true }];
 // CPU 모델 (§8): 입력 시각 = 통과 시각 + 반응 지연 + N(0, σ₀ + σ'·t)·U(.8,1.5). 대실수(확률·U(.7,1.8))면 반주기의 30~50% 어긋남. 후반엔 σ ≤ 반주기의 25%.
-// 시뮬 2,000판 기준(보통·보통·어려움 vs 사람 1명): 사람 σ 28+0.5t ms → 승률 ≈ 26%, σ 22+0.4t → ≈ 55%. 평균 19~20초, 첫 탈락 ≈ 14초.
-const AI = { normal: { delay: .015, s0: .025, sr: .00055, bl: .008 }, hard: { delay: .008, s0: .018, sr: .0004, bl: .005 } };
-const MIX = { 1: ['hard'], 2: ['hard', 'normal'], 3: ['normal', 'normal', 'hard'] }; // key = CPU 수
+// 시뮬 2,000판(사람 σ 28+0.5t ms): 사람 4명 길이 P10/50/90 25/30/34초; 사람 1명 vs 보통·어려움·초고수 → CPU 잠드는 시각 평균 21/31/33초.
+const AI = { normal: { delay: .015, s0: .025, sr: .00055, bl: .008 }, hard: { delay: .008, s0: .018, sr: .0004, bl: .005 }, hyper: { delay: 0, s0: .012, sr: .0002, bl: .003 } };
+const EARLY_T = 8, EARLY_BL = 0.035; // §C14 조용한 초반: t<8s 동안 CPU 대실수율을 최소 3.5%로 올림(시도율은 유지)
+const MIX = { 1: ['hard'], 2: ['hard', 'normal'], 3: ['normal', 'hard', 'hyper'] }; // key = CPU 수
 const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(Math.PI * 2 * Math.random());
 let g, P, T, phi, w, kNum, prevT, casts, resolved, flash, pops, rings, sparks, caption, over, endT, winner, fastSaid, lastScore;
 
 const awake = () => P.filter(p => !p.asleep);
 const nextCross = () => T + ((kNum + 1) * Math.PI - phi) / w; // ω가 통과 사이에 일정하므로 정확한 예측
 const say = (s, life = 2.4) => { caption = { s, life }; };
-function pop(p, s, c, size = 24, life = 0.7, oy = 0) { const o = POS[p.i]; pops.push({ x: o.x, y: o.y - 46 * o.s - 50 + oy, s, c, size, life, max: life }); }
+function pop(p, s, c, size = 24, life = 0.7, oy = 0) { const o = POS[p.i]; pops.push({ x: o.x, y: o.y - 46 * o.s - 62 + oy, s, c, size, life, max: life }); }
 
 function schedule(tc, tn) { // 통과 tc 직후, 다음 통과 tn 에 대한 CPU 입력 예약 (스턴이 tn 전에 끝나야 함)
   for (const p of P) {
     if (p.human || p.asleep || p.stun > tn) continue;
     const hp = tn - tc; let sig = (p.ai.s0 + p.ai.sr * tc) * p.sigMul; if (hp < 2 * sig) sig = hp * 0.25;
-    const err = Math.random() < p.ai.bl * p.blMul ? (Math.random() < .5 ? -1 : 1) * hp * rand(.3, .5) : gauss() * sig;
-    p.q.push(Math.max(tn - hp * 0.49, tn + p.ai.delay + err)); // 직전 통과 쪽으로 귀속되지 않게 하한
+    const err = Math.random() < (tc < EARLY_T ? Math.max(EARLY_BL, p.ai.bl * p.blMul) : p.ai.bl * p.blMul) ? (Math.random() < .5 ? -1 : 1) * hp * rand(.3, .5) : gauss() * sig;
+    const q = Math.max(tn - hp * 0.49, tn + p.ai.delay + err); p.q.push(q < 0.25 ? 0.25 : q); // 직전 통과 쪽으로 귀속되지 않게 하한
   }
 }
-function press(p) {
-  if (T < p.stun || T < 0.25) return; // 코골이 스턴 중(또는 '시작!' 직후 반사 연타) 입력 무시, 페널티 없음
-  const dPrev = T - prevT, dNext = nextCross() - T, k = dPrev < dNext ? kNum : kNum + 1, e = Math.min(dPrev, dNext);
+function press(p, at = T) { // at: 입력 시각(CPU는 예약 시각 — 프레임 시각이 아니라)
+  if (at < p.stun || at < 0.25) return; // 코골이 스턴 중(또는 '시작!' 직후 반사 연타) 입력 무시, 페널티 없음
+  const dPrev = at - prevT, dNext = nextCross() - at, k = dPrev < dNext ? kNum : kNum + 1, e = Math.min(dPrev, dNext);
   if (k <= p.used) return; p.used = k; // 통과당 1회 — 연타는 무시
-  const perf = Math.max(Math.asin(0.12) / w, 0.017), good = Math.max(Math.asin(0.30) / w, 0.034);
+  const perf = Math.max(Math.asin(0.12) / w, PF_MIN), good = Math.max(Math.asin(0.30) / w, GD_MIN);
   const amt = e <= perf ? HIT_PERFECT : e <= good ? HIT_GOOD : 0, o = POS[p.i];
   if (amt) {
     (casts[k] ||= {})[p.i] = amt; p.cast = 0.35; rings.push({ i: p.i, t: 0, big: amt === HIT_PERFECT });
@@ -44,17 +45,16 @@ function press(p) {
     if (amt === HIT_PERFECT) for (let j = 0; j < 8; j++) sparks.push({ x: o.x, y: o.y - 30 * o.s, vx: rand(-170, 170), vy: rand(-240, -60), life: rand(.3, .5) });
     if (p.human) amt === HIT_PERFECT ? sfx.good() : sfx.tap();
   } else {
-    p.s += MISS_SELF; p.stun = T + 2 * Math.PI / w; p.stunHit = false; p.q.length = 0;
+    p.s += MISS_SELF; p.stun = at + 2 * Math.PI / w; p.q.length = 0; // 스턴은 방어가 아니다: 코 고는 동안 파동은 모두 맞는다
     pop(p, '쿠울…', '#c9c2d6'); pop(p, 'Z z Z', '#9ad0ff', 20, 0.8, -26);
     p.human ? sfx.bad() : sfx.beep(200, 0.1, 'triangle', 0.03);
   }
 }
-function resolve(k) { // 통과 k 의 최면 파동 확정: 성공자는 면역, 나머지 깨어 있는 전원이 가장 강한 최면을 맞는다 (코 고는 중엔 스턴당 1회)
+function resolve(k) { // 통과 k 의 최면 파동 확정: 성공자는 면역, 나머지 깨어 있는 전원(코 고는 중 포함)이 가장 강한 최면을 맞는다
   const c = casts[k] || {}; let mx = 0; for (const j in c) mx = Math.max(mx, c[j]);
   if (!mx) return;
   for (const o of P) {
     if (o.asleep || c[o.i]) continue;
-    if (T < o.stun) { if (o.stunHit) continue; o.stunHit = true; }
     o.s += mx; o.sway = 0.3; if (o.human) sfx.beep(320, 0.1, 'sine', 0.035);
   }
   delete casts[k];
@@ -78,16 +78,18 @@ function endGame(list) { // list: 순위 상위부터. 생존자 점수 = 종료
 g = Game({ id: 'snore', title: '코골이 대결', duration: 0,
   howto: ['시계추가 가운데 빨간 바늘을 지나는 순간 A 버튼!', '맞추면 상대들이 졸리고, 놓치면 내가 코를 골아요', '끝까지 깨어 있는 한 마리가 승리 (제한 시간 없음)'],
   init() {
-    const kinds = (MIX[4 - g.humans] || []).slice().sort(() => Math.random() - 0.5);
-    P = slots().map(s => ({ ...s, s: 0, asleep: false, stun: -1, stunHit: false, used: 0, cast: 0, sway: 0, fall: 0, q: [], score: 0, rank: 0, sleepT: 0,
+    const kinds = (MIX[4 - g.humans] || []).slice(); for (let i = kinds.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [kinds[i], kinds[j]] = [kinds[j], kinds[i]]; }
+    P = slots().map(s => ({ ...s, s: 0, asleep: false, stun: -1, used: 0, cast: 0, sway: 0, fall: 0, q: [], score: 0, rank: 0, sleepT: 0,
       ai: s.human ? null : AI[kinds.pop()] || AI.normal, sigMul: rand(0.8, 1.5), blMul: rand(0.7, 1.8) }));
     T = 0; phi = Math.PI / 2; w = W0; kNum = 0; prevT = -9; casts = {}; resolved = 0; flash = 0; pops = []; rings = []; sparks = []; over = null; endT = 0; winner = null; fastSaid = false; lastScore = 0;
-    say('마지막까지 깨어 있는 쪽이 이깁니다!', 3); schedule(0, Math.PI / 2 / w); // 추는 +55° 끝점에서 출발, 첫 통과는 0.6s 후
+    say('마지막까지 깨어 있는 쪽이 이깁니다!', 3); schedule(-Math.PI / 2 / w, Math.PI / 2 / w); // 추는 +55° 끝점에서 출발, 첫 통과는 0.6s 후
   },
-  update(dt) {
-    if (over) { over.t -= dt; if (over.t > 1.5) phi += w * dt; if (over.t <= 0) { over.t = 9; g.finish(); } } // 0.3s 뒤 추 정지, 승리 연출 1.5s, 종료
+  update(dt) { if (P.some(p => p.human && !p.asleep)) step(dt); else { step(dt * 0.75); step(dt * 0.75); } }, // 사람 전원 탈락 후 관전 1.5배속(부분 스텝)
+  draw(ctx) { drawAll(ctx); },
+  result() { return { scores: P.map(p => p.score || +(T + 10 - p.s * 5).toFixed(2)), text: winner ? `${winner.name} 승리 · ${endT.toFixed(1)}초 만에 끝` : '' }; } });
+function step(dt) {
+    if (over) { over.t -= dt; if (over.t > 1.5) phi += w * dt; if (over.t <= 0) { over.t = 9; caption = null; g.finish(); } } // 0.3s 뒤 추 정지, 승리 연출 1.5s, 종료
     else {
-      if (!P.some(p => p.human && !p.asleep)) dt *= 1.5; // 사람 전원 탈락 후 관전 가속
       T += dt; phi += w * dt;
       if (phi >= (kNum + 1) * Math.PI) { // 중앙 통과: 정확한 통과 시각으로 ω 갱신, 플래시, 째깍, CPU 예약
         const tc = T - (phi - (kNum + 1) * Math.PI) / w, w2 = Math.min(WMAX, W0 * Math.pow(1.05, tc));
@@ -98,7 +100,7 @@ g = Game({ id: 'snore', title: '코골이 대결', duration: 0,
       for (const p of P) {
         if (p.asleep) continue;
         if (p.human) { const k = g.p(p.i); if (k.hit('a') || k.hit('b')) press(p); }
-        else while (p.q.length && T >= p.q[0]) { p.q.shift(); press(p); }
+        else while (p.q.length && T >= p.q[0]) press(p, p.q.shift());
       }
       if (resolved < kNum && T >= prevT + Math.PI / (2 * w)) { resolved = kNum; resolve(kNum); } // 반주기 중간에 파동 확정
       checkSleep();
@@ -111,8 +113,8 @@ g = Game({ id: 'snore', title: '코골이 대결', duration: 0,
     for (const r of rings) r.t += dt; rings = rings.filter(r => r.t < 0.7);
     for (const q of sparks) { q.vy += 520 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; } sparks = sparks.filter(q => q.life > 0);
     if (caption) { caption.life -= dt; if (caption.life <= 0) caption = null; }
-  },
-  draw(ctx) {
+}
+function drawAll(ctx) {
     const t = g.time;
     bg(ctx, g.W, g.H, '#1e1633', '#3a2458');
     ctx.save(); ctx.translate(480, 300); ctx.rotate(t * 0.21); ctx.lineWidth = 16; // 최면 소용돌이 12°/s
@@ -144,7 +146,7 @@ g = Game({ id: 'snore', title: '코골이 대결', duration: 0,
       else if (T < p.stun && !over) { pose = 'dizzy'; rot = Math.sin(t * 12) * 0.105; } // 코골이: ±6° 휘청
       else { pose = p.s >= 0.5 ? 'dizzy' : 'idle'; rot = p.sway > 0 ? Math.sin(t * 25) * 0.12 * (p.sway / 0.3) : Math.sin(t * 4) * 0.06 * p.s; }
       drawFlamingo(ctx, o.x, o.y + dy, o.s, pose, t + p.i, p.color, { flip: o.flip, rot });
-      if (p.asleep) { const ph = (t % 1.5) / 1.5; ctx.save(); ctx.globalAlpha = 1 - ph; text(ctx, 'Zzz…', o.x + dir * 30, top + 10 - ph * 24, 22, '#9ad0ff'); ctx.restore(); }
+      if (p.asleep) { const ph = (t % 1.5) / 1.5; ctx.save(); ctx.globalAlpha = 1 - ph; text(ctx, 'Zzz…', o.x + dir * 58, top + 34 - ph * 22, 22, '#9ad0ff'); ctx.restore(); }
       else for (let z = 0, n = Math.floor(p.s * 3); z < n; z++) text(ctx, 'z', o.x + dir * (26 + z * 15) * o.s * 0.8, top + 8 - ((t * 28 + z * 22) % 26), 15 + z * 3, '#9ad0ff');
       drawPlayerTag(ctx, o.x, top - 36, p.i);
       if (p.asleep) text(ctx, `${p.rank}위 · 잠듦`, o.x, top - 12, 14, '#c9c2d6');
@@ -157,8 +159,7 @@ g = Game({ id: 'snore', title: '코골이 대결', duration: 0,
     text(ctx, `남은 인원 ${awake().length}/4`, 16, 32, 20, palette.cream, 'left');
     text(ctx, `${T.toFixed(1)}초`, 480, 32, 22, palette.cream);
     text(ctx, `추 속도 ×${(w / W0).toFixed(1)}`, g.W - 16, 32, 18, 'rgba(255,246,234,0.75)', 'right');
-    if (caption) { ctx.save(); ctx.globalAlpha = Math.min(1, caption.life); rr(ctx, 300, 506, 360, 28, 14, 'rgba(20,10,30,0.6)'); text(ctx, caption.s, 480, 525, 17, palette.gold); ctx.restore(); }
+    if (caption && /play|count/.test(g.state())) { ctx.save(); ctx.globalAlpha = Math.min(1, caption.life); rr(ctx, 300, 506, 360, 28, 14, 'rgba(20,10,30,0.6)'); text(ctx, caption.s, 480, 525, 17, palette.gold); ctx.restore(); }
     if (over && over.t <= 1.5 && winner) { ctx.save(); ctx.font = 'bold 60px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 8; ctx.strokeStyle = palette.pinkDark; ctx.fillStyle = palette.white; ctx.strokeText(`${winner.name} 승리!`, 480, 320); ctx.fillText(`${winner.name} 승리!`, 480, 320); ctx.restore(); }
-  },
-  result() { return { scores: P.map(p => p.score || +(T + 10 - p.s * 5).toFixed(2)), text: winner ? `${winner.name} 승리 · ${endT.toFixed(1)}초 만에 끝` : '' }; } });
+}
 </script></body></html>

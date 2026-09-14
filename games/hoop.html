@@ -13,10 +13,11 @@ const PX = [150, 370, 590, 810], PY = 470, AIM_MAX = Math.PI / 3, AIM_SPD = Math
 const COOL = 0.9, DUR = 60, LIMIT = 75, RISE = 0.25, FALL = 0.25, DIZZY = 0.4, HOLE_WAIT = 0.8;
 const BROWN = '#A0522D', HOLE = '#4A2C17', HOLE_IN = '#2E1A0C', FIELD_L = 230, FIELD_R = 730;
 // §5 CPU 난이도: 반응 지연[s] / 조준 오차 σ(°) / 파워 오차 σ / 금색 우선 확률 / 헛던지기(빈 구멍) 확률 / 목표 소멸 시 재선택
-// 반응·금색·헛던지기는 스펙 표 그대로. σ는 헤드리스 시뮬(60초×40판)로 스펙 §8 기대 점수(Hard 8~11 · Normal 5~7 · Easy 2~4)에 맞춰 보정한 값
+// 스펙 §5 표에서 벗어남(의도적): 표 σ(Hard 2.5°/0.07 · Normal 5°/0.14 · Easy 9°/0.25)로는 Hard 평균 15.9점, Easy 1.8점으로 §8 대역 이탈.
+// σ 전부와 Hard 반응 지연(표 0.3~0.5 → 0.4~0.6)을 헤드리스 시뮬(300판, 1P 사람 무입력)로 보정 — 실측 2P Hard 9.6(3~18) · 3P Normal 6.5 · 4P Easy 3.2
 const DIFF = { easy: { react: [0.9, 1.3], ang: 5.5, pow: 0.16, gold: 0, miss: 0.25, re: false },
   normal: { react: [0.55, 0.85], ang: 4.5, pow: 0.12, gold: 0.5, miss: 0.10, re: true },
-  hard: { react: [0.3, 0.5], ang: 3.5, pow: 0.10, gold: 1, miss: 0.03, re: true } };
+  hard: { react: [0.4, 0.6], ang: 4.0, pow: 0.11, gold: 1, miss: 0.03, re: true } };
 const CPU_LEVEL = ['hard', 'hard', 'normal', 'easy']; // 슬롯별 배정(§5): 2P Hard · 3P Normal · 4P Easy. 1P는 항상 사람
 let g, P, digs, rings, parts, floats, holeWait, timer, phase, finishT, spawnT, emptyT, lastGold, goldN, lastTick, elapsed;
 const hx = h => 480 + (h % 3 - 1) * ROW_DX[h / 3 | 0], hy = h => ROW_Y[h / 3 | 0], hrow = h => h / 3 | 0;
@@ -42,7 +43,7 @@ function burst(x, y, n, c, sp) { for (let k = 0; k < n; k++) { const a = rand(0,
 function throwRing(p) { // 0.12s 미만 탭 = 최소 파워 0.15(맨 앞줄). 본체 hit 포즈 0.15s + pop. 착지 y는 줄에 스냅, x만 조준각
   const pw = p.ct < 0.12 ? 0.15 : p.power, row = rowOf(pw);
   p.charging = false; p.cool = COOL; p.hitT = 0.15; sfx.pop();
-  rings.push({ owner: p, sx: p.x, sy: PY, tx: p.x + (row < 0 ? 560 : ROW_D[row]) * Math.tan(p.aim), ty: row < 0 ? -50 : ROW_Y[row], row,
+  rings.push({ owner: p, sx: p.x, sy: PY - 30, tx: p.x + (row < 0 ? 560 : ROW_D[row]) * Math.tan(p.aim), ty: row < 0 ? -50 : ROW_Y[row], row,
     t: 0, dur: flight(pw), hgt: 60 + pw * 90, done: false, land: 0 });
 }
 function land(r) {
@@ -60,7 +61,8 @@ function human(p, i, dt) {
   const k = g.p(i), held = k.down('a') || k.down('down');
   p.aim = clamp(p.aim + k.axis().x * AIM_SPD * dt, -AIM_MAX, AIM_MAX); // 조준은 쿨다운·차지 중에도 가능(원작 양손 동시 조작)
   if (phase !== 'play') { p.charging = false; return; }
-  if (!p.charging && p.cool <= 0 && (k.hit('a') || k.hit('down'))) { p.charging = true; p.ct = 0; p.beepT = 0; } // ↓ = 스틱 당기기, A = 편의 입력
+  if (!held) p.queued = false; else if (k.hit('a') || k.hit('down')) p.queued = true; // 쿨다운 중 누른 입력은 버퍼링
+  if (!p.charging && p.cool <= 0 && p.queued && held) { p.queued = false; p.charging = true; p.ct = 0; p.beepT = 0; } // ↓ = 스틱 당기기, A = 편의 입력
   if (p.charging) {
     p.ct += dt; p.power = powerOf(p.ct); p.beepT -= dt;
     if (p.beepT <= 0) { sfx.beep(300 + Math.min(1, p.power) * 400, 0.05); p.beepT = 0.15; }
@@ -121,7 +123,7 @@ function bigText(ctx, s, x, y, size) { ctx.save(); ctx.font = `bold ${size}px sa
 g = Game({ id: 'hoop', title: '링 던지기', duration: 0,
   howto: ['←→ 로 조준, A 버튼을 길게 눌러 힘을 모으고 떼면 던지기', '튀어나온 두더지에게 고리를 걸면 1점, 금색은 2점', '힘에 따라 앞·가운데·뒷줄 — 너무 세면 뒤로 넘어가요! 60초'],
   init() { // 항상 4마리. 사람이면 입력, 아니면 슬롯별 난이도의 CPU
-    P = slots().map((s, i) => ({ ...s, x: PX[i], score: 0, aim: 0, charging: false, ct: 0, power: 0, cool: 0, hitT: 0, beepT: 0, endPose: 'idle',
+    P = slots().map((s, i) => ({ ...s, x: PX[i], score: 0, aim: 0, charging: false, ct: 0, power: 0, cool: 0, hitT: 0, beepT: 0, queued: false, endPose: 'idle',
       ai: s.human ? null : { d: DIFF[CPU_LEVEL[i]], st: 'wait', t: 0, tgt: null, aimTo: 0, pTo: 0 } }));
     digs = []; rings = []; parts = []; floats = []; holeWait = Array(9).fill(0);
     timer = DUR; phase = 'play'; finishT = 0; spawnT = 0.3; emptyT = 0; lastGold = 0; goldN = 0; lastTick = 99; elapsed = 0;
@@ -173,18 +175,18 @@ g = Game({ id: 'hoop', title: '링 던지기', duration: 0,
       for (const d of digs) if (hrow(d.h) === r) drawDig(ctx, d, t);
     }
     for (const r of rings) { // 비행 중 고리(그림자 먼저): ball 포즈, 360°/0.5s 회전, 뒷줄로 갈수록 축소, 착지 시 0.9→1.0 튕김
-      const k = clamp(r.t / r.dur, 0, 1), x = lerp(r.sx, r.tx, k), yG = lerp(r.sy, r.ty, k), s = lerp(1, r.row < 0 ? 0.5 : ROW_S[r.row] * 0.85, k);
+      const k = clamp(r.t / r.dur, 0, 1), x = lerp(r.sx, r.tx, k), yG = lerp(r.sy, r.ty, k), s = lerp(1, r.row < 0 ? 0.5 : ROW_S[r.row], k);
       const h = r.done ? 0 : Math.sin(k * Math.PI) * r.hgt, bs = r.done ? 0.9 + 0.1 * (r.land / 0.15) : 1;
       if (!r.done) { ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(x, yG + 8 * s, 17 * s, 6 * s, 0, 0, 7); ctx.fill(); }
       drawFlamingo(ctx, x, yG - h, s * bs, 'ball', t, r.owner.color, { rot: r.t * Math.PI * 4 });
     }
     P.forEach((p, i) => { // 플레이어: 조준각의 절반만큼 몸을 틀고(조준선 없음), 발끝에 흐릿한 방향 화살 28px. 태그 · 게이지 · 점수판
-      const pose = phase === 'finish' ? p.endPose : p.hitT > 0 ? 'hit' : 'idle', hop = pose === 'jump' ? Math.abs(Math.sin(t * 5)) * 30 : 0;
-      ctx.save(); ctx.globalAlpha = .35; ctx.strokeStyle = palette.ink; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(p.x, PY + 40); ctx.lineTo(p.x + Math.sin(p.aim) * 28, PY + 40 - Math.cos(p.aim) * 28); ctx.stroke(); ctx.restore();
+      const pose = phase === 'finish' ? p.endPose : p.hitT > 0 ? 'jump' : 'idle', hop = pose === 'jump' ? Math.abs(Math.sin(t * 5)) * 30 : 0;
       drawFlamingo(ctx, p.x, PY - hop, 1.15, pose, t + i, p.color, { rot: pose === 'idle' ? p.aim * 0.5 : 0, flip: p.aim < -0.05 });
-      drawPlayerTag(ctx, p.x, PY - 80, i);
-      if (max > 0 && p.score === max) star(ctx, p.x - 52, PY - 80, 11, i === 2 ? palette.white : palette.gold); // 선두 표시
-      if (p.charging) { const gh = 40, gx = p.x + 52, gy = PY - 102, f = clamp(p.power, 0, 1), over = p.power > 1; // 세로 파워 게이지(오버차지 빨강 점멸)
+      ctx.save(); ctx.globalAlpha = .35; ctx.strokeStyle = palette.ink; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(p.x, PY + 8); ctx.lineTo(p.x + Math.sin(p.aim) * 28, PY + 8 - Math.cos(p.aim) * 28); ctx.stroke(); ctx.restore();
+      const ended = g.state() === 'end'; if (!ended) drawPlayerTag(ctx, p.x, PY - 80, i);
+      if (!ended && max > 0 && p.score === max) star(ctx, p.x - 52, PY - 80, 11, i === 2 ? palette.white : palette.gold); // 선두 표시
+      if (p.charging) { const gh = 40, gx = p.x + (i < 2 ? 52 : -52), gy = PY - 102, f = clamp(p.power, 0, 1), over = p.power > 1; // 세로 파워 게이지(오버차지 빨강 점멸)
         rr(ctx, gx - 6, gy - 3, 12, gh + 6, 4, 'rgba(58,36,48,.55)');
         rr(ctx, gx - 4, gy + gh - gh * f, 8, gh * f, 3, over ? (Math.floor(t * 12) % 2 ? palette.red : palette.white) : p.color);
         ctx.fillStyle = 'rgba(255,255,255,.6)'; [0.38, 0.62].forEach(v => ctx.fillRect(gx - 6, gy + gh - gh * v, 12, 1)); }

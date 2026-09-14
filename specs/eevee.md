@@ -119,7 +119,7 @@
 
 (비평가 수정: 원작 Very Hard COM은 "0.15초 만에 도착"[Serebii 포럼 증언] → 150ms. Hard에서 사람이 4,000pt를 낼 수 있어야 하므로[RetroAchievements 도전과제] Hard는 숙련자 반응(~250ms)보다 느린 270ms. `p_follow`: 뚜껑이 열린 뒤 아직 안 움직인 COM이 다른 플레이어의 돌진/B 페이크를 보면 `reaction` 뒤에 따라서 A를 누를 확률 — 피콘 라운드에서 사람의 B 페이크에 낚여 대신 무는 원작 전략을 재현.)
 - 인간 평균 반응 ~220~280ms(키보드 기준) → Normal과 대등, Hard부터 불리, Very Hard는 "초인적" [확정 어구 반영].
-- 셸에 난이도 선택이 없으면 COM 3명을 **Normal / Normal / Hard**로 배정한다(2차 비평가 수정: 원작 기본 난이도는 Normal이고 Very Hard는 해금 요소이므로 기본 판에 150ms COM을 넣으면 사람이 한 라운드도 못 이긴다. Very Hard/Hyper 표는 난이도 선택 UI가 생길 때를 위해 남김). 사람이 2명 이상이면 남는 COM 슬롯은 Normal부터 채운다. 슬롯 순서: 사람 다음 첫 COM = Hard, 나머지 Normal.
+- 셸에 난이도 선택이 없으면 COM 3명을 **Normal / Normal / Hard**로 배정한다(2차 비평가 수정: 원작 기본 난이도는 Normal이고 Very Hard는 해금 요소이므로 기본 판에 150ms COM을 넣으면 사람이 한 라운드도 못 이긴다. Very Hard/Hyper 표는 난이도 선택 UI가 생길 때를 위해 남김). 사람이 2명 이상이면 남는 COM 슬롯은 Normal부터 채운다. 슬롯 순서: 사람이 1명이면 2P COM = Hard, 나머지 Normal. 사람이 2명 이상이면 COM은 전원 Normal(구현 확정 해석).
 - 피콘을 "확인"하는 COM(안 무는 쪽)은 뚜껑이 열리고 0.4s 뒤 `idle`로 고개만 돌리는 모션(사람이 눈치챌 수 있게).
 - 동시 도착 재현: 같은 프레임(≈16ms) 안에 사람과 COM 입력이 겹치면 둘 다 득점 — COM 반응 표준편차 덕에 자연 발생.
 

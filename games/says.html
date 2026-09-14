@@ -16,7 +16,7 @@ const SX = [180, 380, 580, 780], SY = 400, BX = 200, BY = 40, BW = 560, BH = 160
 const COM = { normal: { react: [0.4, 0.8], key: [0.35, 0.65], p: 0.92, skip: 0.03 }, hard: { react: [0.25, 0.55], key: [0.28, 0.48], p: 0.95, skip: 0.01 } };
 const LEVEL = 'normal';
 const LABEL = { intro: '준비', show: '잘 보세요', erase: '지우는 중', input: '따라 하세요!', replay: '춤 재현', judge: '채점 중', end: '결과' };
-let round, seq, phase, pt, fresh, showIdx, arrowT, rstep, limit, tLeft, doneT, speed, queue, jstage, jt, target, teacher, pops, parts, msg, msgT, elapsed;
+let said, round, seq, phase, pt, fresh, showIdx, arrowT, rstep, limit, tLeft, doneT, speed, queue, jstage, jt, target, teacher, pops, parts, msg, msgT, elapsed;
 
 const say = (s, d = 1.2) => { msg = s; msgT = d; };
 const pop = (x, y, s, c) => pops.push({ x, y, s, c, life: 0.9 });
@@ -28,7 +28,7 @@ function star(ctx, x, y, r, c) { ctx.fillStyle = c; ctx.beginPath(); for (let k 
 
 function press(p, d) { // 화살표 1개 입력 — 사람·COM 공통. 정답 개수만큼 넣으면 완료, 이후 무시. 되돌리기 없음, 정오 피드백 없음
   if (!p.alive || p.done) return;
-  p.inp.push(d); p.pose = POSE[d]; p.poseT = 0.25; p.flip = d === 'left'; p.ghost = { d, t: 0.3 }; beepDir(d);
+  p.inp.push(d); p.pose = 'jump'; p.poseT = 0.15; p.flip = false; sfx.tick(); // 입력 중엔 방향 비공개(중립 반응), 방향은 replay에서만
   if (p.inp.length >= seq.length) p.done = true;
 }
 function planAI(p) { // 라운드 시작 시 성공 여부(p_key^n)·틀릴 위치(균등)·타이밍을 미리 굴린다. 키 간격은 제한 시간 안에 끝나도록 클램프
@@ -40,7 +40,7 @@ function newRound() {
   speed = P.some(p => p.human && p.alive) ? 1 : 2; // 사람 전원 탈락 시 남은 라운드 2배속(규칙엔 영향 없음)
   limit = (n + 2) / speed; showIdx = -1; arrowT = 9; queue = []; target = null;
   P.forEach(p => { p.inp = []; p.done = false; p.res = null; p.poseT = 0; p.pose = p.alive ? 'idle' : 'sleep'; if (p.alive && !p.human) planAI(p); });
-  setPhase('intro'); if (teacher.x !== HOME.x || teacher.y !== HOME.y) walkTo(HOME.x, HOME.y, 0.5);
+  said = false; setPhase('intro'); if (teacher.x !== HOME.x || teacher.y !== HOME.y) walkTo(HOME.x, HOME.y, 0.5);
 }
 function toJudge() { // 라운드 말 일괄 채점: 순서 전부 일치해야 정답. 오답·미완료·무입력은 모두 망치 1대(라운드당 최대 1대)
   setPhase('judge'); jstage = 'next'; jt = 0; const n = seq.length; let good = false;
@@ -59,30 +59,29 @@ function endRound() {
   const alive = P.filter(p => p.alive);
   if (alive.length > 1 && round < 4) { round++; newRound(); return; } // 생존자 ≤1이면 즉시 종료, 아니면 5라운드까지
   const pool = alive.length ? alive : P, min = Math.min(...pool.map(p => p.misses)), win = pool.filter(p => p.misses === min); // 동일 misses = 공동 승자
-  win.forEach(p => { p.pose = 'fly'; p.poseT = 1.3; }); say(`승자는 ${win.map(p => p.name).join('·')}!`, 1.5); sfx.win(); setPhase('end');
+  win.forEach(p => { p.pose = 'fly'; p.poseT = 1.3; }); say(`승자는 ${win.map(p => p.name).join('·')}!`, 1.5); if (win.some(p => p.human)) sfx.win(); else sfx.good(); setPhase('end');
 }
 
 g = Game({ id: 'says', title: '플라밍고 세이즈', howto: ['선생님이 칠판에 그리는 화살표 순서를 외우세요', '칠판이 지워지면 ↑↓←→ 로 순서대로 입력!', '틀리거나 안 누르면 뿅망치 한 대 · 5대면 탈락 · 덜 맞은 쪽이 승리'], duration: 0,
   init() {
-    P = slots().map(s => ({ ...s, misses: 0, alive: true, elim: 0, inp: [], done: false, pose: 'idle', poseT: 0, flip: false, ghost: null, res: null, ai: null, pkey: COM[LEVEL].p + rand(-0.01, 0.01) }));
+    P = slots().map(s => ({ ...s, misses: 0, alive: true, elim: 0, inp: [], done: false, pose: 'idle', poseT: 0, flip: false, res: null, ai: null, pkey: COM[LEVEL].p + rand(-0.01, 0.01) }));
     teacher = { x: HOME.x, y: HOME.y, walk: null, point: -0.9, swing: 0 }; pops = []; parts = []; round = 0; elapsed = 0; msgT = 0; rstep = -1;
     newRound(); // 자막·효과음은 GO! 뒤 첫 intro 프레임에서(타이틀 뒤 장면은 조용히)
   },
   update(dt) {
-    elapsed += dt; pt += dt; if (msgT > 0) msgT -= dt; const first = fresh; fresh = false;
+    elapsed += dt; pt += dt; if (msgT > 0) msgT -= dt; fresh = false;
     const w = teacher.walk; if (w) { w.t += dt; const k = Math.min(1, w.t / w.dur); teacher.x = lerp(w.x0, w.x1, k); teacher.y = lerp(w.y0, w.y1, k); if (k >= 1) teacher.walk = null; }
     teacher.swing = Math.max(0, teacher.swing - dt);
     P.forEach(p => {
       if (p.poseT > 0) { p.poseT -= dt; if (p.pose === 'hit' && p.poseT < 0.6) p.pose = 'dizzy'; if (p.poseT <= 0) p.pose = p.alive ? 'idle' : 'sleep'; }
-      if (p.ghost && (p.ghost.t -= dt) <= 0) p.ghost = null;
     });
     parts.forEach(q => { q.vy += 600 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; }); parts = parts.filter(q => q.life > 0);
     pops.forEach(q => { q.y -= 40 * dt; q.life -= dt; }); pops = pops.filter(q => q.life > 0);
     if (elapsed > SAFETY) { g.finish(); return; } // 안전장치: 무제한 게임이 반드시 끝나도록(정상 최대 ≈100s)
     const n = seq.length, gap = GAPS[round] / speed;
     if (phase === 'intro') { // 선생님이 지시봉으로 칠판을 두드리며 라운드 안내
-      if (first) { say(round === 4 ? '마지막 라운드! 12개나 됩니다!' : `라운드 ${round + 1} · 선생님을 잘 보세요~`); sfx.count(); }
-      if (pt >= 0.8) setPhase('show');
+      if (round === 0 && elapsed < 0.8) pt = 0; // R1은 셸 GO! 오버레이가 끝난 뒤 시작
+      else { if (!said) { said = true; say(round === 4 ? '마지막 라운드! 12개나 됩니다!' : `라운드 ${round + 1} · 선생님을 잘 보세요~`); sfx.count(); } if (pt >= 0.8) setPhase('show'); }
     } else if (phase === 'show') { // 화살표를 등간격(노래 박자)으로 하나씩 그린다. 그려진 것은 칠판에 누적
       const idx = Math.min(n - 1, Math.floor(pt / gap)); arrowT += dt;
       if (idx > showIdx) { showIdx = idx; arrowT = 0; sfx.tap(); beepDir(seq[idx]); teacher.point = ANG[seq[idx]]; teacher.swing = 0.4; }
@@ -92,7 +91,7 @@ g = Game({ id: 'says', title: '플라밍고 세이즈', howto: ['선생님이 �
       tLeft -= dt;
       P.forEach((p, i) => {
         if (!p.alive || p.done) return;
-        if (p.human) { if (!first) { const d = DIRS.find(d => g.p(i).hit(d)); if (d) press(p, d); } return; } // 단계 전환 프레임의 잔류 hit 무시
+        if (p.human) { const d = DIRS.find(d => g.p(i).hit(d)); if (d) press(p, d); return; } // pressed[]는 매 프레임 flush → 선입력 큐 없음
         const a = p.ai; if (a.skip || pt < a.next) return; // 무입력(시간초과) COM은 아예 손대지 않음
         press(p, a.idx === a.failAt ? DIRS.filter(x => x !== seq[a.idx])[Math.floor(rand(0, 3))] : seq[a.idx]); // 틀리는 키에서 엉뚱한 포즈
         a.idx++; a.next += Math.min(a.keyMax, rand(COM[LEVEL].key[0], COM[LEVEL].key[1]));
@@ -133,7 +132,6 @@ g = Game({ id: 'says', title: '플라밍고 세이즈', howto: ['선생님이 �
     P.forEach((p, i) => {
       const x = SX[i], dy = p.pose === 'sleep' ? 18 : 0;
       ctx.fillStyle = 'rgba(58,36,48,.12)'; ctx.beginPath(); ctx.ellipse(x, SY + 36, 28, 6, 0, 0, 7); ctx.fill();
-      if (p.ghost) { ctx.save(); ctx.globalAlpha = p.ghost.t / 0.3; text(ctx, GLYPH[p.ghost.d], x - 40, SY + 10, 30, p.color); ctx.restore(); }
       drawFlamingo(ctx, x, SY + dy, 1, p.pose, t + i, p.color, { flip: p.flip && p.pose === 'run' });
       if (p.pose === 'dizzy') for (let k = 0; k < 3; k++) { const a = t * 7 + k * 2.1; star(ctx, x + 18 + Math.cos(a) * 24, SY - 46 + Math.sin(a) * 6, 6, palette.gold); }
       rr(ctx, x - 44, SY + 24, 88, 14, 5, '#B07A4A'); rr(ctx, x - 38, SY + 38, 7, 30, 2, '#8A5A32'); rr(ctx, x + 31, SY + 38, 7, 30, 2, '#8A5A32');
@@ -164,7 +162,7 @@ g = Game({ id: 'says', title: '플라밍고 세이즈', howto: ['선생님이 �
     }
     parts.forEach(q => { ctx.globalAlpha = clamp(q.life * 2, 0, 1); star(ctx, q.x, q.y, 5, q.c); }); ctx.globalAlpha = 1;
     pops.forEach(q => { ctx.globalAlpha = clamp(q.life * 1.5, 0, 1); text(ctx, q.s, q.x + 1, q.y + 1, 22, 'rgba(58,36,48,.55)'); text(ctx, q.s, q.x, q.y, 22, q.c); }); ctx.globalAlpha = 1;
-    if (msgT > 0 && g.state() !== 'end') { ctx.save(); ctx.font = 'bold 20px sans-serif'; const tw = ctx.measureText(msg).width + 36; ctx.globalAlpha = clamp(msgT * 3, 0, 1); rr(ctx, W / 2 - tw / 2, 244, tw, 36, 18, 'rgba(58,36,48,.85)'); text(ctx, msg, W / 2, 269, 20, palette.white); ctx.restore(); } // 결과 화면(셸 오버레이) 위에는 자막을 남기지 않는다
+    if (msgT > 0 && g.state() !== 'end') { ctx.save(); ctx.font = 'bold 20px sans-serif'; const tw = ctx.measureText(msg).width + 36, my = phase === 'judge' || phase === 'end' ? 190 : 244; ctx.globalAlpha = clamp(msgT * 3, 0, 1); rr(ctx, W / 2 - tw / 2, my, tw, 36, 18, 'rgba(58,36,48,.85)'); text(ctx, msg, W / 2, my + 25, 20, palette.white); ctx.restore(); } // 결과 화면(셸 오버레이) 위에는 자막을 남기지 않는다
   },
   result() { // 생존자 100+(5-misses)*10 → 항상 탈락자(탈락 라운드×10) 위. 동일 misses는 공동 순위, 타이브레이크 없음
     return { scores: P.map(p => p.alive ? 100 + (MAXHP - p.misses) * 10 : p.elim * 10), text: P.map(p => p.alive ? `${p.name} HP ${MAXHP - p.misses}/${MAXHP}·피격 ${p.misses}회` : `${p.name} R${p.elim} 탈락`).join('  ·  ') };

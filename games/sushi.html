@@ -15,7 +15,7 @@ const SUSHI = [
   { n: '차', v: 20, p: 12 }, { n: '오이말이', v: 50, p: 20 }, { n: '계란', v: 150, p: 18 }, { n: '참치말이', v: 200, p: 16 }, { n: '연어알', v: 250, p: 13 },
   { n: '새우', v: 350, p: 10, shout: '새우 하나!' }, { n: '뱃살', v: 600, p: 7, shout: '뱃살 하나!' }, { n: '성게', v: 1000, p: 4, shout: '성게 하나!' }];
 // CPU 모델 (§8): 재평가 주기 · 스폰 인지 지연 · 조준 오차 · 헛스윙 · 차 회피 · 비합리 선택 · 콤보 선호 상한 · 밀치기 · 스폰 예지(초)
-const DIFF = { normal: { re: 0.35, see: 0.3, err: 22, miss: 0.12, tea: 0.8, irr: 0.25, combo: 2, push: 0, fore: 0 },
+const DIFF = { normal: { re: 0.6, see: 0.6, err: 36, miss: 0.32, tea: 0.8, irr: 0.35, combo: 1, push: 0, fore: 0 },
   hard: { re: 0.2, see: 0, err: 10, miss: 0.05, tea: 1, irr: 0.15, combo: 5, push: 0.1, fore: 0.5 } };
 const CPU_DIFF = 'normal'; // §5: CPU 전원 공통 난이도(슬롯별 혼합 없음) — 튜닝용 'hard'
 const START = [[480, 405, 0, 1], [690, 290, 1, 0], [480, 175, 0, -1], [270, 290, -1, 0]];
@@ -32,8 +32,8 @@ function otext(ctx, s, x, y, size, fill, stroke = palette.ink, align = 'center')
 
 let P, plates, rail, pops, parts, chef, playT, lastSec;
 const platePos = (pl, ahead = 0) => railPos(rail + pl.i * LEN / SLOTS + ahead);
-const newPlate = i => { const t = pickType(); return { i, type: t, next: pickType(), wasabi: t >= 5 && Math.random() < WASABI, age: 9, emptyT: 0 }; };
-function spawn(pl) { pl.type = pl.next; pl.next = pickType(); pl.wasabi = pl.type >= 5 && Math.random() < WASABI; pl.age = 0; pl.emptyT = 0; const S = SUSHI[pl.type]; if (S.shout) { chef.say = S.shout; chef.t = 1.0; chef.jump = 0.45; sfx.pop(); } }
+const newPlate = i => { const t = pickType(); return { i, type: t, next: pickType(), wasabi: t >= 5 && Math.random() < WASABI, age: 9, emptyT: 0, avoid: Math.random() < DIFF.normal.tea }; };
+function spawn(pl) { pl.type = pl.next; pl.next = pickType(); pl.wasabi = pl.type >= 5 && Math.random() < WASABI; pl.age = 0; pl.emptyT = 0; pl.avoid = Math.random() < DIFF.normal.tea; const S = SUSHI[pl.type]; if (S.shout) { chef.say = S.shout; chef.t = 1.0; chef.jump = 0.45; sfx.pop(); } }
 function fire(p) { if (p.tng.ph) return; p.tng = { ph: 1, t: 0, len: 0, len0: 0, ate: false, dx: p.dx, dy: p.dy }; if (p.human) sfx.tap(); }
 function retract(p) { const T = p.tng; T.ph = 3; T.t = 0; T.len0 = T.len; }
 // 혀는 다른 플라밍고 몸(r=22)에 막힌다
@@ -46,8 +46,8 @@ function eat(p, pl, q) {
   const gain = S.v * mult; p.bill += gain; p.tng.ate = true; retract(p);
   const py = Math.max(q.y - 12, 104); pops.push({ x: q.x, y: py, s: '+' + yen(gain), c: palette.white, t: 0.8 }); // 상단 접시는 주방장 카운터 아래에서 시작
   if (mult >= 2) { pops.push({ x: q.x, y: py === q.y - 12 ? py - 26 : py + 28, s: '×' + mult + '!', c: palette.gold, t: 0.8 }); sfx.good(); } else sfx.pop();
-  if (hot) { const c = toFloor(p.x - BZ_R, p.y, (FX - BZ_R - 4) / FX, (FY - BZ_R - 4) / FY); // 폭주 원 중심을 바닥 안쪽(반지름만큼 축소한 타원)으로 clamp
-    p.bz = BZ_T; p.bzKind = pl.type === 0 ? 'red' : 'green'; p.bcx = c.x; p.bcy = c.y; p.bzA = Math.atan2(p.y - c.y, p.x - c.x); p.target = null; sfx.bad(); }
+  if (hot) { const ph = rand(0, Math.PI * 2), c = toFloor(p.x - Math.cos(ph) * BZ_R, p.y - Math.sin(ph) * BZ_R, (FX - BZ_R - 4) / FX, (FY - BZ_R - 4) / FY); // 폭주 원 중심을 바닥 안쪽(반지름만큼 축소한 타원)으로 clamp
+    p.bz = BZ_T; p.bzKind = pl.type === 0 ? 'red' : 'green'; p.bcx = c.x; p.bcy = c.y; p.bzA = ph; p.bzIn = 0.1; p.target = null; sfx.bad(); }
   pl.type = -1; pl.emptyT = 0;
 }
 // CPU: 후보 평가 → 접시의 미래 위치 근처로 이동 → 리치 안에 들어오면 A
@@ -55,7 +55,7 @@ function ai(p, dt) {
   const D = DIFF[p.diff]; p.re -= dt;
   const visible = pl => pl.type >= 0 ? pl.age >= D.see : D.fore > 0 && pl.emptyT >= REFILL - D.fore;
   if (p.re <= 0) { p.re = D.re; const cands = [];
-    for (const pl of plates) { if (!visible(pl)) continue; const t = pl.type >= 0 ? pl.type : pl.next; if (t === 0 && Math.random() < D.tea) continue;
+    for (const pl of plates) { if (!visible(pl)) continue; const t = pl.type >= 0 ? pl.type : pl.next; if (t === 0 && (D.tea >= 1 || pl.avoid)) continue; // 차 회피는 스폰당 1회 판정
       const f = platePos(pl, RAIL_V * 0.4), d = Math.hypot(f.x - p.x, f.y - p.y), mult = p.last === t ? Math.min(D.combo, p.streak + 1) : 1;
       cands.push({ pl, v: SUSHI[t].v * mult / Math.max(40, d) }); }
     cands.sort((a, b) => b.v - a.v);
@@ -92,10 +92,10 @@ function drawPlate(ctx, x, y, k, s = 1) {
 }
 
 g = Game({ id: 'sushi', title: '초밥 뷔페', duration: 60,
-  howto: ['←→↑↓ 이동 · A 버튼으로 부리를 뻗어 지나가는 초밥 먹기', '같은 초밥을 연달아 먹으면 ×2→×5 · 60초 뒤 계산서가 가장 비싼 쪽이 승리', '뜨거운 차(¥20)와 와사비 든 고급 초밥은 2초 폭주 — 조심!', '차 ¥20 · 오이 ¥50 · 계란 ¥150 · 참치 ¥200 · 연어알 ¥250 · 새우 ¥350 · 뱃살 ¥600 · 성게 ¥1,000'],
+  howto: ['←→↑↓ 이동 · A 버튼으로 부리를 뻗어 지나가는 초밥 먹기', '같은 초밥을 연달아 먹으면 ×2→×5 · 60초 뒤 계산서가 가장 비싼 쪽이 승리', '뜨거운 차(¥20)와 와사비 든 고급 초밥은 2초 폭주 — 조심!'],
   init() {
     P = slots().map((s, i) => ({ ...s, x: START[i][0], y: START[i][1], dx: START[i][2], dy: START[i][3], flip: START[i][2] < 0, bill: 0, streak: 0, last: -1,
-      tng: { ph: 0, t: 0, len: 0, len0: 0, ate: false, dx: 0, dy: 1 }, bz: 0, bzKind: 'red', bzA: 0, bcx: 0, bcy: 0, moving: false, target: null, re: rand(0, 0.3), pushT: 0, pushTo: null,
+      tng: { ph: 0, t: 0, len: 0, len0: 0, ate: false, dx: 0, dy: 1 }, bz: 0, bzIn: 0, bzKind: 'red', bzA: 0, bcx: 0, bcy: 0, moving: false, target: null, re: rand(0, 0.3), pushT: 0, pushTo: null,
       diff: s.human ? null : CPU_DIFF }));
     plates = []; for (let i = 0; i < SLOTS; i++) plates.push(newPlate(i));
     rail = 0; pops = []; parts = []; chef = { say: '많이 드세요!', t: 1.6, jump: 0 }; playT = 0; lastSec = 99;
@@ -107,7 +107,7 @@ g = Game({ id: 'sushi', title: '초밥 뷔페', duration: 60,
     P.forEach((p, i) => {
       const T = p.tng;
       if (p.bz > 0) { // 폭주: 조작 불능, 반지름 40 원운동 260px/s
-        p.bz -= dt; p.bzA += BZ_SPEED / BZ_R * dt; p.x = p.bcx + Math.cos(p.bzA) * BZ_R; p.y = p.bcy + Math.sin(p.bzA) * BZ_R; p.dx = -Math.sin(p.bzA); p.dy = Math.cos(p.bzA); p.moving = true;
+        p.bz -= dt; p.bzA += BZ_SPEED / BZ_R * dt; const k = p.bzIn > 0 ? Math.min(1, dt / p.bzIn) : 1; p.bzIn -= dt; p.x += (p.bcx + Math.cos(p.bzA) * BZ_R - p.x) * k; p.y += (p.bcy + Math.sin(p.bzA) * BZ_R - p.y) * k; // 첫 0.1초는 원 궤도로 보간 p.dx = -Math.sin(p.bzA); p.dy = Math.cos(p.bzA); p.moving = true;
         if (Math.random() < 21 * dt) parts.push({ x: p.x + rand(-12, 12), y: p.y - 34, vy: -70, life: 0.6, c: p.bzKind === 'red' ? 'rgba(255,255,255,.85)' : '#7BE07B' });
       } else if (!T.ph) { // 혀 뻗는 중엔 이동 불가 · 같은 프레임의 방향 입력을 먼저 반영한 뒤 A(발사 프레임엔 제자리)
         let m = { x: 0, y: 0 }, a = false;
@@ -148,20 +148,21 @@ g = Game({ id: 'sushi', title: '초밥 뷔페', duration: 60,
     ctx.strokeStyle = '#8E8E8E'; ctx.lineWidth = 40; ctx.beginPath(); ctx.ellipse(CX, CY, RX, RY, 0, 0, 7); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 32; ctx.setLineDash([16, 20]); ctx.lineDashOffset = -rail; ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = '#E9E4D8'; ctx.beginPath(); ctx.ellipse(CX, CY, RX - 35, RY - 30, 0, 0, 7); ctx.fill();
-    ctx.globalAlpha = 0.5; SUSHI.forEach((S, k) => { const x = 408 + (k % 4) * 48, y = 262 + (k >> 2) * 54; drawPlate(ctx, x, y, k, 0.6); text(ctx, yen(S.v), x, y + 24, 10, '#6E5A66'); }); ctx.restore();
+    ctx.restore(); ctx.save(); ctx.globalAlpha = 0.28; ctx.font = 'bold 12px sans-serif'; SUSHI.forEach((S, k) => text(ctx, `${S.n} ${yen(S.v)}`, 330 + (k % 4) * 100, 280 + (k >> 2) * 22, 12, '#6E5A66')); ctx.restore(); // 가격표: 흐린 글자만(먹을 수 있는 접시로 오인 방지)
     for (const pl of plates) { const q = platePos(pl); drawPlate(ctx, q.x, q.y, pl.type, pl.type < 0 ? 1 : Math.min(1, 0.4 + pl.age * 3)); }
     // 플라밍고 4마리 (y 순으로 깊이) + 혀 + 조준 표시 + 이름표
     [...P].sort((a, b) => a.y - b.y).forEach(p => {
       const i = p.i, T = p.tng, bz = p.bz > 0;
-      const pose = st === 'end' ? (p.bill === top ? 'jump' : p.bill === low && low !== top ? 'sleep' : 'idle') : bz ? 'run' : T.ph ? 'eat' : p.moving ? 'run' : 'idle';
+      const pose = st === 'end' ? (p.bill === top ? 'jump' : p.bill === low && low !== top ? 'sleep' : 'idle') : bz ? 'dizzy' : T.ph ? 'eat' : p.moving ? 'run' : 'idle';
       const col = bz ? (p.bzKind === 'red' ? '#FF4444' : '#5DD36A') : p.color;
       ctx.fillStyle = 'rgba(58,36,48,.15)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 32, 20, 6, 0, 0, 7); ctx.fill();
       if (!bz && !T.ph && st !== 'end') { ctx.save(); ctx.strokeStyle = p.color; ctx.lineWidth = 3; ctx.globalAlpha = .7; ctx.beginPath(); ctx.moveTo(p.x + p.dx * 30, p.y + p.dy * 30); ctx.lineTo(p.x + p.dx * 42, p.y + p.dy * 42); ctx.stroke(); ctx.restore(); }
-      if (T.ph && T.len > 0) { const f = p.flip ? -1 : 1, e = pose === 'eat', ox = p.x + (e ? 54 : 36) * f, oy = p.y + (e ? -4 : -30), tx = p.x + T.dx * T.len, ty = p.y + T.dy * T.len;
+      if (T.ph && T.len > 0) { const f = p.flip ? -1 : 1, e = pose === 'eat', ox = p.x + T.dx * 14, oy = p.y + T.dy * 14 - 10, tx = p.x + T.dx * T.len, ty = p.y + T.dy * T.len;
         ctx.strokeStyle = '#FF8FB8'; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(tx, ty); ctx.stroke(); ctx.fillStyle = '#FF6FA0'; ctx.beginPath(); ctx.arc(tx, ty, 7, 0, 7); ctx.fill(); }
-      drawFlamingo(ctx, p.x, p.y, 1, pose, t + i, col, { flip: p.flip });
-      const nb = P.find(q => q !== p && Math.abs(q.x - p.x) < 64 && Math.abs(q.y - p.y) < 26); // 이름표 겹침 회피
-      drawPlayerTag(ctx, p.x + (nb ? (p.x < nb.x || (p.x === nb.x && i < nb.i) ? -16 : 16) : 0), p.y - 56, i);
+      drawFlamingo(ctx, p.x, p.y + (bz ? Math.sin(t * 20) * 2 : 0), 1, pose, t + i, col, { flip: p.flip });
+      const nb = P.find(q => q !== p && Math.abs(q.x - p.x) < 64 && Math.abs(q.y - p.y) < 50); // 이름표 겹침 회피(가로+세로)
+      const up = nb && (nb.y > p.y || (nb.y === p.y && i < nb.i));
+      drawPlayerTag(ctx, p.x + (nb ? (p.x < nb.x || (p.x === nb.x && i < nb.i) ? -16 : 16) : 0), p.y - 56 - (up ? 22 : 0), i);
       if (bz) otext(ctx, p.bzKind === 'red' ? '앗 뜨거!' : '매워!', p.x, p.y - 76, 16, p.bzKind === 'red' ? palette.red : palette.green, palette.white);
       else if (p.human && st === 'play' && playT > 1.5 && playT < 8 && p.bill === 0) text(ctx, T.ph ? '쫍!' : '접시 앞을 겨냥해 A!', p.x, p.y - 78, 15, palette.pinkDark);
     });
@@ -176,6 +177,7 @@ g = Game({ id: 'sushi', title: '초밥 뷔페', duration: 60,
       if (p.streak >= 2) text(ctx, `×${Math.min(5, p.streak)} ${SUSHI[p.last].n}`, x + 170, y + 52, 13, '#B8860B', 'right');
       else if (p.last >= 0) text(ctx, SUSHI[p.last].n, x + 170, y + 52, 13, '#9A8A90', 'right');
     });
+    if (st === 'play' && g.timeLeft < 0.3) otext(ctx, '끝!', 480, 250, 72, palette.gold);
     // 시작 직후 1.5초 가격표 띠 (원작 메뉴판 화면 대체)
     if (st === 'play' && playT < 1.5) { ctx.save(); ctx.globalAlpha = Math.min(1, (1.5 - playT) / 0.35); rr(ctx, 160, 84, 640, 66, 12, 'rgba(58,36,48,.9)');
       SUSHI.forEach((S, k) => { const x = 200 + k * 80; drawPlate(ctx, x, 108, k, 0.9); text(ctx, `${S.n} ${yen(S.v)}`, x, 142, 11, palette.white); }); ctx.restore(); }

@@ -7,7 +7,7 @@
 const { palette, drawFlamingo, drawPlayerTag, Game, sfx, text, rr, rand, clamp, lerp, slots } = STADIUM;
 // ── 튜닝 상수 (specs/dig.md · [추정]값은 여기서만 조정) ──
 const DEPTH = 50, STEP_PX = 7.2, SURF = 110, WATER = 470, LANE_X = [150, 370, 590, 810], TUNNEL_W = 70, SCALE = 0.6, FOOT = 34 * SCALE;
-const SAFETY = 45, END_WAIT = 2.0, CALL_T = 1.2, TIMEOUT_T = 0.8, DIG_T = 0.12, DIZZY_T = 0.25, GEYSER_TOP = 125, GEYSER_T = 0.35; // 간헐천 꼭대기: 머리 끝 y≈78, HUD 순위 라벨(y≤54)과 안 겹치는 최고 높이
+const SAFETY = 45, END_WAIT = 2.0, CALL_T = 1.2, TIMEOUT_T = 0.8, DIG_T = 0.12, DIZZY_T = 0.25, GEYSER_TOP = 60, GEYSER_T = 0.35; // 간헐천 꼭대기: 지표 위 50px. 우승 레인 HUD 라벨은 태그 옆으로 비켜 그림
 const RANK_PTS = [100, 60, 30, 10], MISS_BEEP = false; // 같은 버튼 반복은 원작처럼 무음 정지 (옵션 beep 기본 OFF)
 const STRATA = ['#c2905a', '#b07f4c', '#9a6b3d', '#855934', '#6e472a', '#593821'], TUNNEL = '#3a2414', BAND = (WATER - SURF) / STRATA.length;
 // CPU 난이도표: 평균 입력 간격(ms) · 지터(표준편차) · 같은 키 실수율 · GO! 후 첫 입력 지연(ms)
@@ -44,7 +44,7 @@ function ranks() { // 깊이 내림차순, 동률은 공동(건너뛰지 않는)
 }
 function call(ctx, s) { ctx.save(); ctx.font = 'bold 46px sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 8; ctx.lineJoin = 'round'; ctx.strokeStyle = palette.ink; ctx.strokeText(s, g.W / 2, g.H / 2); ctx.fillStyle = palette.gold; ctx.fillText(s, g.W / 2, g.H / 2); ctx.restore(); }
 
-g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 눌러 땅을 파세요 (A·B 버튼도 가능)', '같은 버튼을 연속으로 누르면 헛삽질!', '두 버튼을 동시에 누르면 안 파집니다', '지하 우물에 먼저 닿으면 승리'], duration: 0,
+g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 눌러 땅을 파세요 (또는 각자의 A·B 액션 버튼)', '같은 버튼을 연속으로 누르면 헛삽질!', '두 버튼을 동시에 누르면 안 파집니다', '지하 우물에 먼저 닿으면 승리'], duration: 0,
   init() { P = makeP(); parts = []; elapsed = 0; endAt = null; winners = []; timeout = false; },
   update(dt) {
     elapsed += dt;
@@ -53,7 +53,7 @@ g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 �
         if (p.done) return; let L = false, R = false;
         if (p.human) { const k = g.p(i); L = k.hit('left') || k.hit('a'); R = k.hit('right') || k.hit('b'); }
         else { const key = cpuStep(p, dt); L = key === 'L'; R = key === 'R'; }
-        if (L && R) p.dizzyT = DIZZY_T; else if (L || R) tap(p, i, L ? 'L' : 'R'); // 동시 누름 = 진행 0 + 어리둥절
+        if (L && R) { if (p.last) tap(p, i, p.last === 'L' ? 'R' : 'L'); else p.dizzyT = DIZZY_T; } else if (L || R) tap(p, i, L ? 'L' : 'R'); // 한 프레임 두 입력 = 교대 쪽 1칸만(빠른 롤 관용), 첫 입력이면 어리둥절
       });
       winners = P.filter(p => p.depth >= DEPTH); // 같은 프레임 동시 도달 = 공동 1위
       if (winners.length) { winners.forEach(p => { p.done = true; }); endAt = elapsed; sfx.good(); } // 팡파르(sfx.win/lose)는 셸 finish()가 한 번만 울림
@@ -61,6 +61,7 @@ g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 �
     } else {
       const e = elapsed - endAt;
       for (const p of winners) { p.geyser = clamp(e / GEYSER_T, 0, 1); const top = lerp(WATER, GEYSER_TOP, p.geyser);
+        if (p.geyser >= 1) for (let k = 0; k < 10; k++) if (Math.random() < 0.25) { const a = -Math.PI * (0.1 + 0.8 * k / 9); parts.push({ x: LANE_X[p.i] + Math.cos(a) * 14, y: top, vx: Math.cos(a) * 170, vy: Math.sin(a) * 220 - 60, r: rand(3, 5), life: rand(0.3, 0.5), c: palette.white }); } // 물왕관
         for (let k = 0; k < 2; k++) parts.push({ x: LANE_X[p.i] + rand(-18, 18), y: top + 4, vx: rand(-130, 130), vy: rand(-240, -40), r: rand(3, 5), life: rand(0.3, 0.6), c: palette.white }); }
       if (e >= END_WAIT) g.finish();
     }
@@ -85,18 +86,19 @@ g = Game({ id: 'dig', title: '파! 파! 파!', howto: ['← → 를 번갈아 �
       if (p.depth > 0) { ctx.fillStyle = TUNNEL; ctx.fillRect(x - TUNNEL_W / 2, SURF - 2, TUNNEL_W, fy - SURF + 2); ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x - TUNNEL_W / 2, SURF - 2, 10, fy - SURF + 2); }
       rr(ctx, x - 104, SURF, 8, WATER - SURF, 4, 'rgba(0,0,0,.28)'); if (p.depth > 0) rr(ctx, x - 104, SURF, 8, (WATER - SURF) * p.depth / DEPTH, 4, p.color); // 깊이 게이지
       let cy = fy - FOOT, pose = p.dizzyT > 0 ? 'dizzy' : p.digT > 0 ? 'dig' : 'idle';
-      if (p.done) { const top = lerp(WATER, GEYSER_TOP, p.geyser); rr(ctx, x - 20, top, 40, WATER - top + 20, 12, '#6fb8ff'); rr(ctx, x - 12, top + 10, 8, Math.max(0, WATER - top), 4, 'rgba(255,255,255,.45)'); cy = top - FOOT; pose = p.geyser < 1 ? 'fly' : 'jump'; } // 간헐천
+      if (p.done) { const top = lerp(WATER, GEYSER_TOP, p.geyser); rr(ctx, x - 20, top, 40, WATER - top + 20, 12, '#6fb8ff'); rr(ctx, x - 12, top + 10, 8, Math.max(0, WATER - top), 4, 'rgba(255,255,255,.45)'); cy = top - FOOT; pose = p.geyser < 1 ? 'fly' : 'jump'; if (p.geyser >= 1) { cy -= Math.abs(Math.sin(t * 9)) * 6; p.flip = Math.floor(t / 0.3) % 2 === 0; } } // 간헐천
       drawFlamingo(ctx, x, cy, SCALE, pose, t + i, p.color, { flip: p.flip });
     });
     for (const q of parts) { ctx.globalAlpha = clamp(q.life * 2.5, 0, 1); ctx.fillStyle = q.c; ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, 7); ctx.fill(); } ctx.globalAlpha = 1;
-    P.forEach((p, i) => { const x = LANE_X[i]; drawPlayerTag(ctx, x, 20, i); // HUD는 파티클(간헐천 물방울) 위에 그림
-      if (rk) text(ctx, `${rk[i]}위`, x, 50, 20, rk[i] === 1 ? palette.pinkDark : palette.ink);
-      else text(ctx, `깊이 ${(p.depth * 0.5).toFixed(1)} m`, x, 48, 15, palette.ink, 'center', 'normal'); });
+    P.forEach((p, i) => { const x = LANE_X[i]; drawPlayerTag(ctx, p.done ? x - 72 : x, 20, i); // 우승 레인은 태그를 간헐천 왼쪽으로 // HUD는 파티클(간헐천 물방울) 위에 그림
+      const hx = p.done ? x + 58 : x, hy = p.done ? 26 : 50, al = p.done ? 'left' : 'center'; // 우승 레인 라벨은 간헐천 오른쪽
+      if (rk) { const n = 1 + P.filter(q => q.depth > p.depth).length, none = P.every(q => q.depth === 0); text(ctx, none ? '—' : `${n}위`, hx, hy, 20, n === 1 && !none ? palette.pinkDark : palette.ink, al); } // 셸과 같은 표준 경쟁 순위
+      else text(ctx, `깊이 ${(p.depth * 0.5).toFixed(1)} m`, hx, hy - 2, 15, palette.ink, al, 'normal'); });
     if (e >= 0 && e < callT) call(ctx, timeout ? '시간 종료!' : winners.length > 1 ? `${winners.map(label).join('·')} 동시 도달!` : `${label(winners[0])} 우물 도달!`);
   },
   result() {
-    const r = ranks(), scores = P.map((p, i) => RANK_PTS[r[i] - 1]); // 전원 0칸이면 ranks()가 전원 4위 → 전원 10점
-    const text = timeout ? '시간 종료! 아무도 우물에 닿지 못했어요' : winners.length > 1 ? `${winners.map(label).join('·')} 동시 도달!` : `${label(winners[0])} 우물 도달! (${endAt.toFixed(2)}초)`;
+    const r = ranks(), none = P.every(p => p.depth === 0), scores = P.map((p, i) => none ? 0 : RANK_PTS[r[i] - 1]); // 전원 0칸 = 무승부 0점(최고기록 저장 안 됨)
+    const text = timeout ? `시간 종료! 아무도 우물에 닿지 못했어요${none ? ' (무승부)' : ''}` : winners.length > 1 ? `${winners.map(label).join('·')} 동시 도달!` : `${label(winners[0])} 우물 도달! (${endAt.toFixed(2)}초)`;
     return { scores, text };
   } });
 </script></body></html>

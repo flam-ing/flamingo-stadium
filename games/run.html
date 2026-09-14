@@ -15,7 +15,7 @@ const STUN = 1.2, LIMIT = 2.5, BANNER = 2.0, SAFETY = 75;
 // CPU model (spec §8/§11): taps/s + wobble, hurdle reaction delay mean/σ (per race) after the jump window opens,
 // jump accuracy, extra pause after a crash, start delay. Slots get normal → hard- → hard (2+ humans: hard first).
 const DIFF = {
-  normal: { rate: 7.0, wob: 0.9, react: 0.22, rsd: 0.08, acc: 0.90, post: 0.3, start: 0.30 },
+  normal: { rate: 7.3, wob: 0.9, react: 0.22, rsd: 0.08, acc: 0.90, post: 0.2, start: 0.30 },
   hardm: { rate: 7.5, wob: 0.7, react: 0.19, rsd: 0.07, acc: 0.93, post: 0.2, start: 0.24 },
   hard: { rate: 8.2, wob: 0.6, react: 0.16, rsd: 0.06, acc: 0.96, post: 0.1, start: 0.18 } };
 // belt surface by section: grass → dirt → sand → dirt → grass → GOAL print → finish → grass
@@ -35,7 +35,7 @@ function makeHurdles() { // ~one per 5 m section (85 %), ±1.5 m jitter, ≥3 m 
 }
 function mk(s, d) {
   return { ...s, dist: 0, v: 0, y: 0, jt: -1, stun: 0, fin: -1, finAt: 0, rank: 0, dnf: false, lastTap: -1, jumps: 0, anim: rand(0, 9), hs: makeHurdles(),
-    ai: d && { ...d, react: Math.max(0.05, d.react + gauss() * d.rsd), tapAt: d.start, ph: rand(0, 6.28), per: rand(2, 4) } };
+    ai: d && { ...d, rate: d.rate + rand(-0.4, 0.4), react: Math.max(0.05, d.react + gauss() * d.rsd), tapAt: d.start, ph: rand(0, 6.28), per: rand(2, 4) } };
 }
 function puff(p, c, n, up = -90) { for (let k = 0; k < n; k++) parts.push({ x: RUN_X + rand(-14, 14), y: feetY(p.i) - 4, vx: rand(-90, 90), vy: rand(up, up * 0.3), life: rand(0.3, 0.6), c }); }
 function tap(p) { if (p.stun > 0 || p.fin >= 0 || p.dnf) return; p.v = Math.min(MAX_V, p.v + TAP_V); if (p.human) sfx.tap(); }
@@ -46,7 +46,7 @@ function crash(p, h) { // board folds flat, runner tumbles (hit 0.4 s) then wobb
 }
 function finishRunner(p) { // finish time interpolated inside the frame (spec §4): ties are practically impossible
   p.fin = raceT - (p.dist - TRACK) / Math.max(p.v, 0.01); p.dist = TRACK + 0.6; p.v = 0; p.jt = -1; p.y = 0; p.finAt = g.time;
-  if (winner < 0) { winner = p.i; limitT = LIMIT; sfx.win(); } else sfx.good();
+  if (limitT < 0) { limitT = LIMIT; sfx.win(); } else sfx.good(); // winner = lowest interpolated time, set after ranking
   puff(p, p.color, 14, -170); puff(p, palette.gold, 8, -170);
 }
 function step(p, dt) {
@@ -60,8 +60,8 @@ function step(p, dt) {
   for (const h of p.hs) {
     if (h.pop < 0 && h.d - p.dist <= POP_GAP) { h.pop = raceT; if (p.human) sfx.tick(); } // board rises 5 m ahead
     if (h.passed || h.hit) continue;
-    if (air) { if (h.d <= p.dist) h.passed = true; } // airborne past the board's centre = cleared; landing short of it → crash next frame
-    else if (h.d < p.dist - HURDLE_R) h.passed = true;
+    if (h.d <= p.dist - HURDLE_R) { h.passed = true; continue; } // board fully behind (spec §3 window: 0.55·v − 0.35)
+    if (air) continue;
     else if (Math.abs(h.d - p.dist) < HURDLE_R) { crash(p, h); return; } // ran into it (too late, or jumped too early and landed short)
   }
   if (air && p.jt >= JUMP_T) { p.jt = -1; p.y = 0; puff(p, '#D9C39A', 6); } // landing dust
@@ -87,7 +87,6 @@ function endRace() {
   over = true; bannerT = BANNER; let dnf = false;
   P.forEach(p => { if (p.fin < 0) { p.dnf = true; p.v = 0; p.jt = -1; p.y = 0; p.stun = 0; dnf = true; } });
   if (dnf) sfx.lose();
-  if (winner < 0) winner = P.reduce((b, p) => p.dist > P[b].dist ? p.i : b, 0);
 }
 
 function drawTrees(ctx, top) { // park behind the platform, drifting one way = the original's slow orbiting camera
@@ -144,8 +143,9 @@ function drawLane(ctx, p) {
   text(ctx, status, g.W - 20, top + 28, done || p.dnf ? 18 : 22, p.dnf ? palette.red : palette.ink, 'right');
   if (!p.dnf && !done) text(ctx, `${p.v.toFixed(1)} m/s`, g.W - 20, top + 54, 13, '#7A6272', 'right', 'normal');
   if (p.human && !over && !done && p.stun <= 0) { // beginner hints: mash to start moving, ↑ over the very first board
-    if (p.v < 0.3 && raceT > 0.6) text(ctx, 'A 버튼 연타!', RUN_X + 98, ft - 48 + Math.sin(g.time * 8) * 3, 15, palette.pinkDark);
-    const h = p.hs[0]; if (h && p.jumps === 0 && h.pop >= 0 && !h.hit && !h.passed) text(ctx, '↑ 점프!', wx(h.d), ft - 34 - Math.abs(Math.sin(g.time * 6)) * 6, 15, palette.pinkDark);
+    const h = p.hs[0], jh = h && p.jumps === 0 && h.pop >= 0 && !h.hit && !h.passed; // one hint at a time
+    if (!jh && p.v < 0.3 && raceT > 0.6) text(ctx, 'A 버튼 연타!', RUN_X + 98, ft - 48 + Math.sin(g.time * 8) * 3, 15, palette.pinkDark);
+    if (jh) text(ctx, '↑ 점프!', wx(h.d), ft - 34 - Math.abs(Math.sin(g.time * 6)) * 6, 15, palette.pinkDark);
   }
 }
 function drawTop(ctx) { // small translucent minimap (not in the original; the contract wants live status for everyone)
@@ -165,6 +165,7 @@ function drawBanner(ctx) { // "1P WINS" of the original: colour badge + gold 승
   const w = P[winner], k = clamp((BANNER - bannerT) / 0.3, 0, 1), cx = g.W / 2, cy = g.H / 2;
   ctx.save(); ctx.globalAlpha = k; ctx.translate(0, (1 - k) * -30);
   rr(ctx, cx - 240, cy - 64, 480, 128, 26, 'rgba(58,36,48,.78)');
+  if (!w) { text(ctx, '완주자 없음', cx, cy + 16, 48, palette.gold); ctx.restore(); return; }
   ctx.fillStyle = w.color; ctx.beginPath(); ctx.arc(cx - 140, cy, 46, 0, 7); ctx.fill();
   text(ctx, w.name, cx - 140, cy + (w.human ? 10 : 2), w.human ? 28 : 24, w.i === 2 ? palette.ink : palette.white);
   if (!w.human) text(ctx, 'CPU', cx - 140, cy + 24, 14, w.i === 2 ? palette.ink : palette.white);
@@ -190,19 +191,22 @@ g = Game({ id: 'run', title: '달려라 플라밍고',
       step(p, dt);
     });
     P.filter(p => p.fin >= 0).sort((a, b) => a.fin - b.fin || a.i - b.i).forEach((p, k) => { p.rank = k + 1; }); // rank by interpolated time, lower slot first on a tie
+    const r1 = P.find(p => p.rank === 1); if (r1) winner = r1.i;
     if (winner >= 0) limitT -= dt;
     if (P.every(p => p.fin >= 0) || (winner >= 0 && limitT <= 0) || raceT > SAFETY) endRace();
   },
   draw(ctx) {
     bg(ctx, g.W, g.H, '#9ED9FF', '#E8F7FF');
+    const cz = Math.min(1.03, 1 + raceT * 0.0015); // slow orbit-camera hint: tiny tilt + gradual zoom
+    ctx.save(); ctx.translate(g.W / 2, g.H / 2); ctx.rotate(0.012 * Math.sin(raceT * 0.13)); ctx.scale(cz, cz); ctx.translate(-g.W / 2, -g.H / 2);
     P.forEach(p => drawLane(ctx, p));
-    for (const q of parts) { ctx.globalAlpha = clamp(q.life * 2.5, 0, 1); ctx.fillStyle = q.c; ctx.beginPath(); ctx.arc(q.x, q.y, 3.5, 0, 7); ctx.fill(); } ctx.globalAlpha = 1;
+    for (const q of parts) { ctx.globalAlpha = clamp(q.life * 2.5, 0, 1); ctx.fillStyle = q.c; ctx.beginPath(); ctx.arc(q.x, q.y, 3.5, 0, 7); ctx.fill(); } ctx.globalAlpha = 1; ctx.restore();
     drawTop(ctx);
     if (over && bannerT > 0) drawBanner(ctx);
   },
   result() { // finishers: race time in seconds (lower is better); DNF: 999 + metres left, so they rank behind every finisher
     const w = P[winner], fin = w && w.fin >= 0;
-    return { scores: P.map(p => p.fin >= 0 ? +p.fin.toFixed(2) : +(999 + TRACK - p.dist).toFixed(1)), lowerIsBetter: true,
-      text: fin ? `1위 ${w.name}${w.human ? '' : ' CPU'} ${w.fin.toFixed(2)}초 · 미완주는 999 + 남은 거리` : '완주자 없음' };
+    return { scores: P.map(p => p.fin >= 0 ? +p.fin.toFixed(3) : +(999 + TRACK - p.dist).toFixed(1)), lowerIsBetter: true,
+      text: (fin ? `1위 ${w.name}${w.human ? '' : ' CPU'} ${w.fin.toFixed(2)}초` : '완주자 없음') + ' · 점수 = 기록(초), 미완주 = 999 + 남은 m' };
   } });
 </script></body></html>

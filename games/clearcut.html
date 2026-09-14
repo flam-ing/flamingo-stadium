@@ -9,14 +9,14 @@ const { palette, drawFlamingo, drawPlayerTag, Game, sfx, bg, rr, rand, clamp, le
 const PX = [150, 370, 590, 810], FEET = 430, BLADE_Y = 300, LOG_H = 200, LOG_W = 56, WAIT_TOP = 50, LAND = 500, REST_TOP = LAND - LOG_H, BODY_Y = FEET - 34 * 1.8;
 // LAND: 통나무 하단 착지 y. 받침대 구멍 속으로 70px 꽂히므로(칼날 y=300보다 위에서 멈추면 윗부분 선은 영영 칼날에 못 옴) 모든 흰 선(15~85%)이 칼날을 지난다.
 const ROUNDS = 5, SAFETY = 60, V0 = 360, GRAV = 900, READY_T = 1.2, RAISE_T = 2.0, RESULT_T = 2.0, GAP_T = 1.0;
-const LINE_RANGE = [[.4, .6], [.35, .65], [.3, .7], [.2, .8], [.15, .85]]; // 라운드별 흰 선 위치(통나무 상단 기준 비율)
-const DIFF = { normal: { mean: 30, sig: 28, delay: 0.18, miss: 0.06 }, hard: { mean: 12, sig: 14, delay: 0.12, miss: 0.02 } }; // CPU: 목표 오프셋(px, +=일찍)·오차·반응 지연·완전 실수 확률
-let g, P, phase, pt, round, holdT, elapsed, over, popups, parts, tickN, thumped, perfectSfx, sway;
+const LINE_RANGE = [[.3, .7], [.25, .72], [.22, .75], [.2, .8], [.2, .8]]; // 라운드별 흰 선 위치(통나무 상단 기준 비율)
+const DIFF = { normal: { mean: 30, sig: 28, delay: 0.18, miss: 0.06 }, hard: { mean: 12, sig: 14, delay: 0.16, miss: 0.02 } }; // CPU: 목표 오프셋(px, +=일찍)·오차·반응 지연·완전 실수 확률
+let g, P, phase, banner = 0, v0 = V0, pt, round, holdT, elapsed, over, popups, parts, tickN, thumped, perfectSfx, sway;
 const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.2832 * Math.random());
 const active = () => phase === 'raise' || phase === 'hold' || phase === 'drop';
 
 function startRound() {
-  round++; phase = 'raise'; pt = 0; tickN = 0; thumped = false; perfectSfx = false;
+  round++; phase = 'raise'; pt = 0; banner = 0.6; v0 = V0 * rand(0.9, 1.1); tickN = 0; thumped = false; perfectSfx = false;
   const [lo, hi] = LINE_RANGE[round - 1];
   P.forEach(p => {
     p.log = { top: REST_TOP, vy: 0, frac: rand(lo, hi), cut: false, landed: false, up: null }; p.swung = false;
@@ -43,7 +43,7 @@ function swing(p) {
   if (phase !== 'drop' || L.top + LOG_H < BLADE_Y || L.top > BLADE_Y) return judge(p, -10, 'whiff');
   const d = BLADE_Y - (L.top + LOG_H * L.frac); // +: 선이 아직 칼날 위(일찍)  −: 이미 지나감(늦게)
   const pts = Math.abs(d) <= 12 ? 20 : d > 12 ? Math.max(1, 10 - Math.floor((d - 12) / 10)) : Math.max(-10, -Math.ceil((-d - 12) / 10));
-  L.cut = true; L.up = { h: BLADE_Y - L.top, y: L.top, x: 0, vy: L.vy - 160, vx: 110, rot: 0, rest: false, alpha: 1 };
+  L.cut = true; L.up = { h: BLADE_Y - L.top, y: L.top, x: 0, vy: -200, vx: 110, rot: 0, rest: false, alpha: 1 };
   burst(p.cx, BLADE_Y, 8, '#d9b27c', 180);
   judge(p, pts, pts === 20 ? 'perfect' : pts > 0 ? 'early' : 'late');
 }
@@ -66,7 +66,7 @@ g = Game({ id: 'clearcut', title: '플라밍고 벌목왕', howto: ['통나무�
     phase = 'ready'; pt = 0; round = 0; holdT = 0; elapsed = 0; over = false; popups = []; parts = []; tickN = 0; thumped = false; perfectSfx = false; sway = 0;
   },
   update(dt) {
-    elapsed += dt; pt += dt; if (sway > 0) sway -= dt;
+    elapsed += dt; pt += dt; if (banner > 0) banner -= dt; if (sway > 0) sway -= dt;
     if (elapsed > SAFETY && !over) { over = true; g.finish(); return; } // 안전장치
     P.forEach((p, i) => {
       if (g.isHuman(i)) { const k = g.p(i); if (k.hit('a') || k.hit('b')) swing(p); }
@@ -84,15 +84,15 @@ g = Game({ id: 'clearcut', title: '플라밍고 벌목왕', howto: ['통나무�
       if (pt >= RAISE_T) { phase = 'hold'; pt = 0; holdT = rand(0.8, 2.4); }
     } else if (phase === 'hold') {
       P.forEach(p => p.log.top = WAIT_TOP + Math.sin(g.time * 5) * 2);
-      if (pt >= holdT) { phase = 'drop'; pt = 0; sway = 0.5; sfx.pop(); P.forEach(p => p.log.vy = V0); }
+      if (pt >= holdT) { phase = 'drop'; pt = 0; sway = 0.5; sfx.pop(); P.forEach(p => p.log.vy = v0); }
     } else if (phase === 'drop') {
       let allDown = true;
       P.forEach(p => {
         const L = p.log;
         if (!L.landed) {
           L.vy += GRAV * dt; L.top += L.vy * dt;
-          if (L.top + LOG_H >= LAND) {
-            L.top = REST_TOP; L.landed = true; burst(p.cx, FEET, 6, 'rgba(255,255,255,.75)', 80);
+          if (L.cut ? L.top + LOG_H >= FEET + 10 : L.top + LOG_H >= LAND) {
+            if (!L.cut) L.top = REST_TOP; else L.vy = 0; L.landed = true; burst(p.cx, FEET, 6, 'rgba(255,255,255,.75)', 80);
             if (!thumped) { thumped = true; sfx.beep(90, 0.15, 'square', 0.5); }
             if (!p.swung) { p.swung = true; judge(p, -10, 'miss'); }
           }
@@ -123,12 +123,12 @@ g = Game({ id: 'clearcut', title: '플라밍고 벌목왕', howto: ['통나무�
       // 받침대(구멍 뚫린 그루터기) + 칼날 높이 마커
       rr(ctx, cx - 45, FEET, 90, 26, 8, '#a0703c'); ctx.fillStyle = '#c99560'; ctx.beginPath(); ctx.ellipse(cx, FEET, 45, 9, 0, 0, 7); ctx.fill();
       ctx.fillStyle = '#4a2e16'; ctx.beginPath(); ctx.ellipse(cx, FEET, 31, 6.5, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = palette.red; ctx.beginPath(); ctx.moveTo(cx - 50, BLADE_Y - 8); ctx.lineTo(cx - 36, BLADE_Y); ctx.lineTo(cx - 50, BLADE_Y + 8); ctx.fill();
+      ctx.fillStyle = phase === 'drop' ? palette.red : 'rgba(230,57,70,.35)'; ctx.beginPath(); ctx.moveTo(cx - 50, BLADE_Y - 8); ctx.lineTo(cx - 36, BLADE_Y); ctx.lineTo(cx - 50, BLADE_Y + 8); ctx.fill();
       // 거미(회색 플라밍고) + 실
       const sx = cx + (sway > 0 ? Math.sin(g.time * 25) * 6 * sway : 0), attached = phase === 'raise' || phase === 'hold';
-      ctx.strokeStyle = '#e8dcc0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(sx, 12); ctx.moveTo(sx, 36);
+      ctx.strokeStyle = '#e8dcc0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(sx, 12); ctx.moveTo(sx, 46);
       if (attached) ctx.lineTo(cx, L.top - 4); else ctx.lineTo(sx + Math.sin(g.time * 7) * 6, 60); ctx.stroke();
-      drawFlamingo(ctx, sx, 22, 0.9, 'fly', g.time + i, '#777');
+      drawFlamingo(ctx, sx, 32, 0.75, 'fly', g.time + i, '#777777');
       // 통나무(또는 두 조각)
       const lineY = L.top + LOG_H * L.frac;
       ctx.save(); ctx.beginPath(); ctx.rect(cx - 60, 0, 120, FEET + 5); ctx.clip(); // 구멍 아래로 들어간 부분은 가림
@@ -140,16 +140,18 @@ g = Game({ id: 'clearcut', title: '플라밍고 벌목왕', howto: ['통나무�
       const bounce = phase === 'end' && p.win ? -Math.abs(Math.sin(g.time * 8)) * 26 : 0;
       drawFlamingo(ctx, p.x, BODY_Y + bounce, 1.8, p.pose, g.time + i, p.color, { flip: true });
       // 상태: 태그 + 합계 + 라운드별 결과 점
+      if (g.state() !== 'play' && g.state() !== 'count') return; // 타이틀/종료 오버레이와 겹치지 않게 숨김
       drawPlayerTag(ctx, p.x, 470, i);
-      if (g.state() === 'title') return; // 타이틀 오버레이 문구(y≈502)와 겹치지 않게 점수 줄은 숨김
       otext(ctx, `${p.score}점`, p.x, 507, 24, p.score < 0 ? palette.red : palette.white);
       for (let r = 0; r < ROUNDS; r++) { const v = p.hist[r]; ctx.fillStyle = v == null ? 'rgba(255,255,255,.35)' : v === 20 ? palette.gold : v > 0 ? palette.white : palette.red; ctx.beginPath(); ctx.arc(p.x - 28 + r * 14, 524, 5, 0, 7); ctx.fill(); }
     });
     parts.forEach(q => { ctx.globalAlpha = clamp(q.life * 2, 0, 1); ctx.fillStyle = q.c; ctx.fillRect(q.x - 3, q.y - 3, 6, 6); }); ctx.globalAlpha = 1;
     popups.forEach(q => { ctx.save(); ctx.globalAlpha = clamp(q.life, 0, 1); otext(ctx, q.s, q.x, q.y, q.size, q.c); if (q.sub) otext(ctx, q.sub, q.x, q.y + 26, 18, palette.gold, 3); ctx.restore(); });
     // HUD (통나무·거미와 겹치지 않는 상단 빈 띠에 배치)
+    if (g.state() !== 'play' && g.state() !== 'count') return;
+    if (banner > 0) otext(ctx, `라운드 ${round}`, g.W / 2, 250, 48, palette.gold, 5);
     rr(ctx, 115, 10, 150, 40, 12, 'rgba(58,36,48,.72)'); otext(ctx, `라운드 ${Math.max(1, round)} / ${ROUNDS}`, 190, 38, 22, palette.gold, 0);
-    const hint = phase === 'ready' ? '준비…' : phase === 'raise' || phase === 'hold' ? '부리 높이에서 A 버튼!' : phase === 'drop' ? '베어라!' : phase === 'end' ? '벌목 끝!' : '';
+    const hint = phase === 'ready' ? '준비…' : phase === 'raise' || phase === 'hold' ? '기다려… 떨어질 때 흰 선이 부리에 오면 A!' : phase === 'drop' ? '지금 베어라!' : phase === 'end' ? '벌목 끝!' : '';
     if (hint) otext(ctx, hint, 630, 38, 16, palette.white, 3);
   },
   result() {
