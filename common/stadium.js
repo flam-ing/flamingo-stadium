@@ -184,7 +184,11 @@
         if (go > 0) go -= dt;
         cfg.update(dt);
         if (cfg.duration && state === 'play') { timeLeft -= dt; if (timeLeft <= 0) { timeLeft = 0; finish(); } }
-      } else if (state === 'end') { endLock -= dt; if (endLock <= 0 && (input.hit('Space') || input.hit('Enter'))) start(); }
+      } else if (state === 'end') {
+        endLock -= dt;
+        for (let d = 1; d <= 4; d++) if (input.hit('Digit' + d) || input.hit('Numpad' + d)) { settings.humans = d; saveSettings(); sfx.pop(); }
+        if (endLock <= 0 && (input.hit('Space') || input.hit('Enter'))) start();
+      }
       ctx.clearRect(0, 0, W, H);
       cfg.draw(ctx);
       if (state === 'play' && cfg.duration) hud(ctx, `${timeLeft.toFixed(1)}s`, `BEST ${best}`);
@@ -207,7 +211,8 @@
       const sl = slots();
       sl.forEach((s, i) => { const x = W / 2 - 240 + i * 160; ctx.fillStyle = s.human ? s.color : 'rgba(255,255,255,.18)'; ctx.beginPath(); ctx.roundRect(x - 64, 350, 128, 54, 12); ctx.fill(); ctx.fillStyle = s.human ? (i === 2 ? palette.ink : palette.white) : 'rgba(255,255,255,.6)'; ctx.font = 'bold 20px sans-serif'; ctx.fillText(s.name + (s.human ? '' : ' CPU'), x, 373); ctx.font = '12px sans-serif'; ctx.fillText(s.human ? `${keyLabel(s.keys.left)}${keyLabel(s.keys.right)} ${keyLabel(s.keys.a)}` : '컴퓨터', x, 394); });
       ctx.font = 'bold 26px sans-serif'; ctx.fillStyle = palette.gold; ctx.fillText('SPACE 로 시작', W / 2, H - 70);
-      ctx.font = '15px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(`1~4 : 사람 수 (지금 ${settings.humans}명)   ·   K : 키 설정`, W / 2, H - 38);
+      ctx.font = 'bold 19px sans-serif'; ctx.fillStyle = palette.pinkLight; ctx.fillText(`같이 하려면 숫자 1~4 로 사람 수를 정하세요 (지금 ${settings.humans}명)`, W / 2, H - 36);
+      ctx.font = '14px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.fillText('K : 키 설정', W / 2, H - 15);
       drawFlamingo(ctx, 90, H - 110, 1.6, 'idle', t); drawFlamingo(ctx, W - 90, H - 110, 1.6, 'idle', t + 1, palette.players[1], { flip: true });
       ctx.restore();
     }
@@ -244,7 +249,8 @@
         ctx.textAlign = 'center'; ctx.font = '20px sans-serif'; ctx.fillStyle = palette.white; if (result.text) ctx.fillText(result.text, W / 2, 400);
       } else { ctx.font = '24px sans-serif'; ctx.fillStyle = palette.white; ctx.fillText(result.text, W / 2, 230); }
       ctx.font = '18px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillText(`최고 기록 ${best}`, W / 2, 430);
-      ctx.font = 'bold 26px sans-serif'; ctx.fillStyle = palette.gold; ctx.fillText('SPACE 로 다시', W / 2, H - 50);
+      ctx.font = 'bold 26px sans-serif'; ctx.fillStyle = palette.gold; ctx.fillText('SPACE 로 다시', W / 2, H - 52);
+      ctx.font = '15px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText(`숫자 1~4 로 사람 수 바꾸기 (지금 ${settings.humans}명)`, W / 2, H - 26);
       ctx.restore();
     }
     requestAnimationFrame(loop);
