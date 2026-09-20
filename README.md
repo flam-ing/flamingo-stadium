@@ -1,10 +1,10 @@
 # Flamingo Stadium 🦩
 
-[![PLAY NOW](https://img.shields.io/badge/PLAY%20NOW-GitHub%20Pages-4caf50?style=for-the-badge&logo=githubpages&logoColor=white)](https://flam-ing.github.io/flamingo-stadium/) [![SOURCE CODE](https://img.shields.io/badge/SOURCE%20CODE-minwoo19930301-e7322d?style=for-the-badge&logo=github&logoColor=white)](https://github.com/flam-ing/flamingo-stadium)
+[![PLAY NOW](https://img.shields.io/badge/PLAY%20NOW-GitHub%20Pages-4caf50?style=for-the-badge&logo=githubpages&logoColor=white)](https://flam-ing.github.io/flamingo-stadium/) [![SOURCE CODE](https://img.shields.io/badge/SOURCE%20CODE-flam-ing-e7322d?style=for-the-badge&logo=github&logoColor=white)](https://github.com/flam-ing/flamingo-stadium)
 
-포켓몬 스타디움 1·2 「키즈 클럽」 미니게임 21종을 플라밍고 스타일로 다시 만든 웹 미니게임 모음입니다.
+통합 포털: [Flaming Games](https://flaming-games.vercel.app/) · [Stadium](https://flaming-games.vercel.app/flamingo-stadium/) · [Flamingo Party](https://flaming-games.vercel.app/flamingo-party/)
 
-통합 포털: [Flaming Games](https://flaming-games.vercel.app/) · [Stadium](https://flaming-games.vercel.app/flamingo-stadium/) · [Flamingo Party](https://flaming-games.vercel.app/flamingo-party/) 빌드도 서버도 없이 `index.html`을 열면 됩니다. 바닐라 JS, 외부 라이브러리 없음.
+포켓몬 스타디움 1·2 「키즈 클럽」 미니게임 21종을 플라밍고 스타일로 다시 만든 웹 미니게임 모음입니다. 빌드도 서버도 없이 `index.html`을 열면 됩니다. 바닐라 JS, 외부 라이브러리 없음.
 
 **한 키보드로 1~4명이 같이 합니다.** 게임 타이틀 화면이나 결과 화면에서 숫자 `1~4`로 사람 수를 정하고, 타이틀에서 `K`로 각자 키를 바꿀 수 있습니다. 사람이 아닌 자리는 CPU가 채웁니다. 설정은 모든 게임에 함께 적용되고 브라우저에 저장됩니다.
 
