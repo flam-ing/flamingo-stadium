@@ -1,6 +1,6 @@
 # Flamingo Stadium 🦩
 
-[![PLAY NOW](https://img.shields.io/badge/PLAY%20NOW-GitHub%20Pages-4caf50?style=for-the-badge&logo=githubpages&logoColor=white)](https://flam-ing.github.io/flamingo-stadium/) [![SOURCE CODE](https://img.shields.io/badge/SOURCE%20CODE-flam-ing-e7322d?style=for-the-badge&logo=github&logoColor=white)](https://github.com/flam-ing/flamingo-stadium)
+[![PLAY NOW](https://img.shields.io/badge/PLAY%20NOW-GitHub%20Pages-4caf50?style=for-the-badge&logo=githubpages&logoColor=white)](https://rlaalsdn4564.github.io/flamingo-stadium/) [![SOURCE CODE](https://img.shields.io/badge/SOURCE%20CODE-flam-ing-e7322d?style=for-the-badge&logo=github&logoColor=white)](https://github.com/rlaalsdn4564/flamingo-stadium)
 
 통합 포털: [Flaming Games](https://flaming-games.vercel.app/) · [Stadium](https://flaming-games.vercel.app/flamingo-stadium/) · [Flamingo Party](https://flaming-games.vercel.app/flamingo-party/)
 
